@@ -97,11 +97,46 @@ class IsaacSimulator(BaseSim, NodeInterface):
             SpawnElevators=self.node.create_client_wrapper(SpawnElevators, "/isaac/SpawnElevators"),
             PauseSimulation=self.node.create_client_wrapper(std_srvs.srv.Trigger, "/isaac/PauseSimulation"),
             UnpauseSimulation=self.node.create_client_wrapper(std_srvs.srv.Trigger, "/isaac/UnpauseSimulation"),
+            ResetSensors=self.node.create_client_wrapper(DeletePrims, "/isaac/ResetSensors"),
         )
 
         # Publisher for external registration messages so IsaacSim's DoorManager
         # can be informed about spawned entities in the IsaacSim process.
         self._reg_pub = self.node.create_publisher(StdString, '/isaac/register_entity', 10)
+
+    async def robot_reset_sensors(self, robots: Sequence[Robot]) -> bool:
+        """Re-seat Isaac Sim lidar render products after a robot teleport.
+
+        After EditPrims moves a robot prim, the OmniGraph IsaacCreateRenderProduct
+        node still references the old world-space transform.  Calling this service
+        tells the Isaac Sim process to re-set the cameraPrim input on every
+        LidarPublisher graph under the robot, forcing the render product to
+        re-query the prim's current world transform and resume publishing /scan
+        from the new position.
+        """
+        robot_params_list = await asyncio.gather(*(
+            arena_robots.Robot.RobotIdentifier(robot.model.name).resolve()
+            for robot in robots
+        ))
+
+        prim_paths = [
+            os.path.join("/World", self._NS_ROBOT(robot.sim_path))
+            for robot in robots
+        ]
+
+        self._logger.info(f"Resetting sensors for robot prims: {prim_paths}")
+        res = await self._clients.ResetSensors.call_timeout(
+            DeletePrims.Request(names=prim_paths)
+        )
+        if res is None:
+            self._logger.error("ResetSensors service call timed out")
+            return False
+        self._logger.info(f"ResetSensors response: {res.ret}")
+        ok = all(res.ret)
+        if not ok:
+            failed = [path for path, status in zip(prim_paths, res.ret) if not status]
+            self._logger.error(f"ResetSensors failed for prims: {failed}")
+        return ok
 
     async def robot_spawn(self, robots):
         async def impl(robot: Robot) -> bool:
@@ -227,14 +262,20 @@ class IsaacSimulator(BaseSim, NodeInterface):
         return await asyncio.gather(*(self._delete_entity(self._NS_PRIM(o.sim_path)) for o in obstacles))
 
     async def pedestrian_delete(self, pedestrians):
-        res = await self._clients.DeletePedestrians.call_timeout(
-            DeletePrims.Request(names=[self._NS_PEDESTRIAN(p.sim_path) for p in pedestrians])
-        )
-        if res is None:
-            ret = tuple(False for _ in pedestrians)
-        else:
-            ret = tuple(res.ret)
-        return ret
+        if not pedestrians:
+            return ()
+        try:
+            res = await self._clients.DeletePedestrians.call_timeout(
+                DeletePrims.Request(names=[self._NS_PEDESTRIAN(p.sim_path) for p in pedestrians])
+            )
+            if res is None:
+                ret = tuple(False for _ in pedestrians)
+            else:
+                ret = tuple(res.ret)
+            return ret
+        except Exception as e:
+            self._logger.debug(f"Pedestrian delete (non-fatal): {e}")
+            return tuple(False for _ in pedestrians)
 
     async def robot_delete(self, robots):
         return await asyncio.gather(*(self._delete_entity(self._NS_ROBOT(r.sim_path)) for r in robots))

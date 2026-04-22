@@ -1,0 +1,9 @@
+contestants:
+- local_planner: dwb
+  name: dwb
+- local_planner: crowdnav
+  name: crowdnav
+- local_planner: drlvo
+  name: drlvo
+- local_planner: sicnav
+  name: sicnav

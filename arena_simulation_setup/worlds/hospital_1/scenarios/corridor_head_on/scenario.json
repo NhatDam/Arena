@@ -1,0 +1,36 @@
+{
+  "robots": [
+    {
+      "start": [
+        9.5,
+        10.0,
+        0.0
+      ],
+      "goal": [
+        9.5,
+        30.0,
+        0.0
+      ]
+    }
+  ],
+  "dynamic": [
+    {
+      "name": "hunav_1",
+      "pos": [
+        9.5,
+        20.0,
+        3.14
+      ],
+      "type": "adult",
+      "model": "female_adult_medical_01",
+      "waypoints": [
+        [
+          9.5,
+          0.0,
+          3.14
+        ]
+      ],
+      "behavior_tree": "./bt.xml"
+    }
+  ]
+}

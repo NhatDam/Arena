@@ -155,6 +155,7 @@ class Task(_TaskRegistry, NodeInterface, Props_):
         super().__init__(*args, **kwargs)
 
         self._force_reset = False
+        self._is_resetting: bool = False
 
         self.environment_manager = environment_manager
         self.robots_manager = robots_manager
@@ -204,6 +205,45 @@ class Task(_TaskRegistry, NodeInterface, Props_):
         self.__tm_obstacles = self.registry_obstacles[tm_obstacles]()(node=self.node, props=self)
         self.__param_tm_obstacles = tm_obstacles
 
+    async def clear_all_costmaps(self):
+        """Clear both local and global costmaps for every managed robot.
+
+        Should be called after the simulator has unpaused so that TF/odom are
+        current and the costmap rolling windows re-centre on the new position.
+        """
+        await asyncio.gather(*(
+            rm.clear_costmaps()
+            for rm in self.robots_manager.managers.values()
+        ))
+
+    def suspend_all_goal_publishing(self):
+        """Cancel goal publishing for all robots.
+
+        Call right after _task.reset() so that Nav2 does not start navigating
+        before the costmap lifecycle cycle has purged stale observations.
+        """
+        for rm in self.robots_manager.managers.values():
+            rm.suspend_goal_publishing()
+
+    def resume_all_goal_publishing(self):
+        """Restart goal publishing for all robots.
+
+        Call after costmap lifecycle cycling is complete.
+        """
+        for rm in self.robots_manager.managers.values():
+            rm.resume_goal_publishing()
+
+    async def cycle_all_local_costmaps(self):
+        """Deactivate and reactivate local costmaps for every managed robot.
+
+        This fully resets observation buffers, purging stale observations
+        from a previous robot position after a teleport.
+        """
+        await asyncio.gather(*(
+            rm.cycle_local_costmap()
+            for rm in self.robots_manager.managers.values()
+        ))
+
     async def _reset_task(self, **kwargs):
         """
         Reset the task by updating task modes, resetting modules, and spawning obstacles.
@@ -215,6 +255,7 @@ class Task(_TaskRegistry, NodeInterface, Props_):
             None
         """
         try:
+            self._is_resetting = True 
             self.__reset_start.publish(std_msgs.Empty())
 
             await self.robots_manager.set_up()
@@ -233,6 +274,9 @@ class Task(_TaskRegistry, NodeInterface, Props_):
             for module in self.__modules:
                 module.before_reset()
 
+            # 1. Suspend nav goals so robot doesn't navigate with stale costmap
+            self.suspend_all_goal_publishing()
+
             await self.__tm_robots.reset(**kwargs)
             obstacles, dynamic_obstacles = await self.__tm_obstacles.reset(**kwargs)
 
@@ -244,16 +288,24 @@ class Task(_TaskRegistry, NodeInterface, Props_):
 
             await self.environment_manager.respawn(respawn)
 
+            # 2. Wait briefly for Isaac Sim physics + TF to settle after teleport
+            await asyncio.sleep(1.0)
+
+            # 3. Clear any remaining stale costmap data
+            await self.clear_all_costmaps()
+
             for module in self.__modules:
                 module.after_reset()
 
             self.last_reset_time = self.clock.clock.sec
-
+            # 4. Resume goal publishing now that costmaps are clean
+            self.resume_all_goal_publishing()
         except Exception as e:
             self.node.get_logger().error(repr(e))
             raise
 
         finally:
+            self._is_resetting = False            
             self.__reset_end.publish(std_msgs.Empty())
 
     def _mutex_reset_task(self, **kwargs):
@@ -307,6 +359,8 @@ class Task(_TaskRegistry, NodeInterface, Props_):
         Returns:
             bool: True if the task is done, False otherwise.
         """
+        if self._is_resetting:
+            return False
         return self._force_reset or await self.__tm_robots.done
 
     async def set_robot_position(self, pose: Pose):

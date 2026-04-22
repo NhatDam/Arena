@@ -1,7 +1,7 @@
 contest:
-  config: basic.yaml
+  config: hospital_1_nav2.yaml
 general:
-  simulator: gazebo
+  simulator: isaac
 suite:
-  config: meta_suite.yaml
+  config: hospital_1.yaml
   scale_episodes: 1

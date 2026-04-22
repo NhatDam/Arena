@@ -8,6 +8,7 @@ import math
 
 import attrs
 import geometry_msgs.msg
+import nav_msgs.msg
 import numpy as np
 import rclpy.client
 import rclpy.node
@@ -264,6 +265,8 @@ class HunavHumanSimulator(
     # Publishers
     _arena_peds_publisher: rclpy.node.Publisher
     _wall_markers_publisher: rclpy.node.Publisher
+    _robot_states_publisher: rclpy.node.Publisher
+    _human_states_publisher: rclpy.node.Publisher
 
     def __init__(self, *args, namespace: Namespace, simulator: BaseSim, **kwargs):
         """Initialize HunavManager with debug logging"""
@@ -300,6 +303,14 @@ class HunavHumanSimulator(
 
         self._agent_previous_orientations = {}
         self._orientation_smoothing_factor = 0.15  # 0.05-0.3 range
+
+        # Robot state tracking for hunav evaluator
+        self._robot_agent_msg: Agent = _create_robot_message()
+        self._robot_odom_received: bool = False
+        self._robot_prev_position: typing.Optional[geometry_msgs.msg.Point] = None
+        self._robot_prev_time: typing.Optional[float] = None
+        self._robot_cmd_vel: typing.Optional[geometry_msgs.msg.Twist] = None
+        self._robot_current_goal: typing.Optional[geometry_msgs.msg.Pose] = None
 
         self._logger.debug("Collections initialized")
 
@@ -348,6 +359,9 @@ class HunavHumanSimulator(
             # Setup obstacle subscriber
         if not self._setup_obstacle_subscriber():
             self._logger.error("Failed to setup obstacle subscriber")
+
+        # Setup robot odom subscription for hunav evaluator (may not succeed yet if robots not spawned)
+        self._robot_odom_subscribed = self._setup_robot_odom_subscription()
 
         self._logger.debug("Waiting for services to be ready...")
         await asyncio.sleep(2.0)
@@ -419,11 +433,188 @@ class HunavHumanSimulator(
                 10
             )
 
+            # Publishers for hunav_evaluator (hunav_msgs/Agent and hunav_msgs/Agents)
+            self._robot_states_publisher = self.node.create_publisher(
+                Agent,
+                self._namespace('robot_states'),
+                10
+            )
+            self._human_states_publisher = self.node.create_publisher(
+                Agents,
+                self._namespace('human_states'),
+                10
+            )
+            self._logger.info("Created robot_states and human_states publishers for hunav_evaluator")
+
             self._logger.info("=== ARENA PEDS PUBLISHER SETUP COMPLETE ===")
             return True
 
         except Exception as e:
             self._logger.error(f"Arena peds publisher setup failed: {e}")
+            return False
+
+    def _robot_odom_callback(self, msg: nav_msgs.msg.Odometry):
+        """Update the robot Agent message with live odom data for hunav evaluator.
+
+        Computes velocity from position deltas when odom twist is zero (Isaac Sim).
+        Falls back to cmd_vel if available, then to odom twist.
+        """
+        pose = msg.pose.pose
+        twist = msg.twist.twist
+        now = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+
+        self._robot_agent_msg.position = pose
+
+        # Extract yaw from quaternion
+        q = pose.orientation
+        siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
+        cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+        current_yaw = float(math.atan2(siny_cosp, cosy_cosp))
+        self._robot_agent_msg.yaw = current_yaw
+
+        # Determine velocity: prefer position-delta calculation, then cmd_vel, then odom twist
+        odom_has_twist = abs(twist.linear.x) > 1e-6 or abs(twist.linear.y) > 1e-6 or abs(twist.angular.z) > 1e-6
+
+        if odom_has_twist:
+            # Odom twist is populated (e.g. Gazebo)
+            self._robot_agent_msg.velocity = twist
+            self._robot_agent_msg.linear_vel = float(
+                math.sqrt(twist.linear.x ** 2 + twist.linear.y ** 2)
+            )
+            self._robot_agent_msg.angular_vel = float(twist.angular.z)
+        elif self._robot_prev_position is not None and self._robot_prev_time is not None:
+            # Compute velocity from position deltas (Isaac Sim odom has no twist)
+            dt = now - self._robot_prev_time
+            if dt > 1e-6:
+                dx = pose.position.x - self._robot_prev_position.x
+                dy = pose.position.y - self._robot_prev_position.y
+                linear_vel = math.sqrt(dx ** 2 + dy ** 2) / dt
+
+                # Angular velocity from yaw delta
+                prev_yaw = self._robot_prev_yaw if hasattr(self, '_robot_prev_yaw') else current_yaw
+                dyaw = current_yaw - prev_yaw
+                # Normalize to [-pi, pi]
+                dyaw = math.atan2(math.sin(dyaw), math.cos(dyaw))
+                angular_vel = dyaw / dt
+
+                self._robot_agent_msg.linear_vel = float(linear_vel)
+                self._robot_agent_msg.angular_vel = float(angular_vel)
+                self._robot_agent_msg.velocity.linear.x = float(dx / dt)
+                self._robot_agent_msg.velocity.linear.y = float(dy / dt)
+                self._robot_agent_msg.velocity.angular.z = float(angular_vel)
+        elif self._robot_cmd_vel is not None:
+            # Fallback: use cmd_vel
+            self._robot_agent_msg.velocity = self._robot_cmd_vel
+            self._robot_agent_msg.linear_vel = float(
+                math.sqrt(self._robot_cmd_vel.linear.x ** 2 + self._robot_cmd_vel.linear.y ** 2)
+            )
+            self._robot_agent_msg.angular_vel = float(self._robot_cmd_vel.angular.z)
+
+        # Store for next iteration
+        self._robot_prev_position = geometry_msgs.msg.Point(
+            x=pose.position.x, y=pose.position.y, z=pose.position.z
+        )
+        self._robot_prev_time = now
+        self._robot_prev_yaw = current_yaw
+
+        # Set goal if available
+        if self._robot_current_goal is not None:
+            self._robot_agent_msg.goals = [self._robot_current_goal]
+
+        self._robot_odom_received = True
+
+    def _robot_cmd_vel_callback(self, msg: geometry_msgs.msg.Twist):
+        """Cache the latest cmd_vel for velocity estimation."""
+        self._robot_cmd_vel = msg
+
+    def _robot_goal_callback(self, msg: geometry_msgs.msg.PoseStamped):
+        """Update the robot's current navigation goal for hunav evaluator metrics."""
+        self._robot_current_goal = msg.pose
+        self._robot_agent_msg.goals = [msg.pose]
+        self._logger.debug(f"Robot goal updated: ({msg.pose.position.x:.2f}, {msg.pose.position.y:.2f})")
+
+    def _setup_robot_odom_subscription(self):
+        """Subscribe to the robot's odom, cmd_vel, and goal_pose topics for hunav evaluator.
+
+        Also sets desired_velocity, radius, and goal_radius on the robot Agent message
+        from ROS params / config values.
+
+        Tries 'robot' param to get the robot name.
+        Returns True if subscription was created, False if not available yet.
+        """
+        try:
+            robot_name = None
+            try:
+                robot_name = self.node.get_parameter('robot').get_parameter_value().string_value
+            except Exception:
+                pass
+
+            if not robot_name:
+                return False
+
+            # Subscribe to odom
+            robot_odom_topic = self._namespace(robot_name, 'odom')
+            self._robot_odom_sub = self.node.create_subscription(
+                nav_msgs.msg.Odometry,
+                robot_odom_topic,
+                self._robot_odom_callback,
+                10
+            )
+            self._logger.info(f"Subscribed to robot odom on {robot_odom_topic}")
+
+            # Subscribe to cmd_vel (fallback velocity source)
+            robot_cmd_vel_topic = self._namespace(robot_name, 'cmd_vel')
+            self._robot_cmd_vel_sub = self.node.create_subscription(
+                geometry_msgs.msg.Twist,
+                robot_cmd_vel_topic,
+                self._robot_cmd_vel_callback,
+                10
+            )
+            self._logger.info(f"Subscribed to robot cmd_vel on {robot_cmd_vel_topic}")
+
+            # Subscribe to goal_pose (published by robot_manager)
+            robot_goal_topic = self._namespace(robot_name, 'goal_pose')
+            self._robot_goal_sub = self.node.create_subscription(
+                geometry_msgs.msg.PoseStamped,
+                robot_goal_topic,
+                self._robot_goal_callback,
+                10
+            )
+            self._logger.info(f"Subscribed to robot goal on {robot_goal_topic}")
+
+            # Set robot radius from param
+            try:
+                robot_radius = self.node.rosparam[float].get('robot_radius', 0.25)
+                self._robot_agent_msg.radius = float(robot_radius)
+            except Exception:
+                self._robot_agent_msg.radius = 0.25
+
+            # Set desired_velocity from model_params linear_range max, or fallback
+            try:
+                from ament_index_python.packages import get_package_share_path
+                model_params_path = get_package_share_path('arena_robots') / 'robots' / robot_name / 'model_params.yaml'
+                with open(model_params_path) as f:
+                    params = yaml.safe_load(f)
+                actions = params.get('actions', {})
+                continuous = actions.get('continuous', {})
+                linear_range = continuous.get('linear_range', [0.0, 0.4])
+                max_vel = float(linear_range[1]) if len(linear_range) > 1 else 0.4
+                self._robot_agent_msg.desired_velocity = max_vel
+            except Exception:
+                self._robot_agent_msg.desired_velocity = 0.4  # sensible default
+            self._logger.info(f"Robot desired_velocity set to {self._robot_agent_msg.desired_velocity}")
+
+            # Set goal_radius from task_generator config
+            try:
+                goal_radius = self.node.conf.Robot.GOAL_TOLERANCE_RADIUS.value
+                self._robot_agent_msg.goal_radius = float(goal_radius)
+            except Exception:
+                self._robot_agent_msg.goal_radius = 1.0  # default from constants/runtime.py
+            self._logger.info(f"Robot goal_radius set to {self._robot_agent_msg.goal_radius}")
+
+            return True
+        except Exception as e:
+            self._logger.debug(f"Robot odom subscription not ready yet: {e}")
             return False
 
     def _setup_obstacle_subscriber(self):
@@ -521,6 +712,9 @@ class HunavHumanSimulator(
             with self.node.sim_time_rate(10.0) as (done, rate):
                 while not done.is_set():
                     await rate.get()
+                    # Retry robot odom subscription if not yet connected
+                    if not self._robot_odom_subscribed:
+                        self._robot_odom_subscribed = self._setup_robot_odom_subscription()
                     async with self._agents_lock:
                         await self._simulator.pedestrian_update(
                             self._arena_pedestrians_container
@@ -944,10 +1138,10 @@ class HunavHumanSimulator(
                         # Create request
                         request = ComputeAgents.Request()
                         request.current_agents = current_agents
-                        request.robot = _create_robot_message()
-                        response = await self._compute_agents_client.call_timeout(
-                            request
-                        )
+                        # Use live robot pose if available, otherwise fallback to default
+                        request.robot = self._robot_agent_msg if self._robot_odom_received else _create_robot_message()
+                        response = await self._compute_agents_client.call_timeout(request)
+
 
                         if response and response.updated_agents:
                             # Fix frame_id
@@ -1032,6 +1226,18 @@ class HunavHumanSimulator(
 
                         self._arena_peds_publisher.publish(self._arena_pedestrians_container)
                         self._publish_wall_markers()
+                        
+                        # Publish human_states for hunav_evaluator
+                        if self._last_updated_agents is not None:
+                            human_states_msg = Agents()
+                            human_states_msg.header.frame_id = "map"
+                            human_states_msg.header.stamp = self.node.sim_time.to_msg()
+                            human_states_msg.agents = list(self._last_updated_agents.agents)
+                            self._human_states_publisher.publish(human_states_msg)
+
+                        # Publish robot_states for hunav_evaluator
+                        if self._robot_odom_received:
+                            self._robot_states_publisher.publish(self._robot_agent_msg)
 
         except asyncio.CancelledError:
             pass

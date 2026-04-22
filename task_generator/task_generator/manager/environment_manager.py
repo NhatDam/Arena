@@ -270,7 +270,19 @@ class EnvironmentManager(NodeInterface, _Realizer):
         """
         Moves given robot
         """
-        return await self._human_simulator.move_robot(tuple(map(self.realize, robots)))
+        realized = tuple(map(self.realize, robots))
+        result = await self._human_simulator.move_robot(realized)
+        # Reset render products — no-op for non-Isaac simulators
+        sensors_ok = await self._simulator.robot_reset_sensors(realized)
+        robot_names = [r.name for r in realized]
+        self._logger.info(
+            f"move_robot: moved={result} reset_sensors_ok={sensors_ok} robots={robot_names}"
+        )
+        if not sensors_ok:
+            self._logger.error(
+                f"Sensor reset failed after robot move for robots={robot_names}"
+            )
+        return result
 
     async def remove_robot(self, robots: Sequence[Robot]) -> Sequence[bool]:
         """

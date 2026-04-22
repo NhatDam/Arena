@@ -103,6 +103,7 @@ class RobotManager(NodeInterface):
         self._start_pos = Pose()
         self._goal_pos = Pose()
         self._is_goal_reached = False
+        self._goal_active = False
         self._robot_radius = 0.25
 
         self._goal_tolerance_distance = self.node.conf.Robot.GOAL_TOLERANCE_RADIUS.value
@@ -241,9 +242,9 @@ class RobotManager(NodeInterface):
         pose.position.z += self._config.model_params.z_offset
         self.robot.pose = pose
         await self._environment_manager.move_robot((self.robot,))
-        import time
-        time.sleep(0.001)  # wait for the robot to move
+        await asyncio.sleep(0.5)     
         await self._clear_local_costmap(-1)
+        await asyncio.sleep(0.2) 
 
     async def _clear_local_costmap(self, reset_distance: float = -1) -> bool:
         """Clear the local costmap around the robot.
@@ -286,6 +287,114 @@ class RobotManager(NodeInterface):
             f"successfull service call for {srv_name}"
         )
         return True
+    async def _clear_global_costmap(self) -> bool:
+        """Clear the entire global costmap (obstacle layer data)."""
+        node_name = self.node.service_namespace(self.name, 'global_costmap/global_costmap')
+        srv_name = os.path.abspath(node_name('../clear_entirely_global_costmap'))
+
+        state = await self.node.get_lifecycle_state_async(node_name)
+        if state.id != lifecycle_msgs.msg.State.PRIMARY_STATE_ACTIVE:
+            return False
+
+        self._logger.info(f"Clearing global costmap: {srv_name}")
+        cli = self.node.create_client_wrapper(
+            ClearEntireCostmap,
+            srv_name,
+        )
+        await cli.ensure()
+
+        result = await cli.call_timeout(ClearEntireCostmap.Request())
+        if result is None:
+            self._logger.error(f"service call failed for {srv_name}")
+            return False
+        self._logger.info(f"successfull service call for {srv_name}")
+        return True
+
+    async def clear_costmaps(self) -> None:
+        """Clear both local and global costmaps entirely.
+
+        Should be called after the simulator has unpaused so that TF is
+        up-to-date and the costmap rolling window re-centres correctly.
+        """
+        await asyncio.gather(
+            self._clear_local_costmap(-1),
+            self._clear_global_costmap(),
+        )
+
+    def suspend_goal_publishing(self):
+        """Cancel the goal publishing task to prevent premature navigation.
+
+        Call this immediately after _task.reset() so that the BT navigator
+        does not pick up a goal while the local costmap still contains
+        stale observations from before the teleport.
+        """
+        if self._publish_goal_task is not None:
+            self._publish_goal_task.cancel()
+            self._publish_goal_task = None
+
+    def resume_goal_publishing(self):
+        """Restart the goal publishing loop.
+
+        Call this after the costmap lifecycle cycle is complete so Nav2
+        starts with a clean observation buffer.
+        """
+        if self._goal_pos is not None and not self._is_goal_reached:
+            if self._publish_goal_task is not None:
+                self._publish_goal_task.cancel()
+            self._publish_goal_task = asyncio.create_task(
+                self._publish_goal_loop()
+            )
+
+    async def cycle_local_costmap(self) -> bool:
+        """Deactivate and reactivate the local costmap lifecycle node.
+
+        This fully resets the observation buffer, purging any stale
+        observations from a previous robot position.  Call this after the
+        robot has been teleported and TF has settled at the new pose.
+
+        Returns:
+            bool: True if the cycle completed successfully.
+        """
+        node_name = self.node.service_namespace(
+            self.name, 'local_costmap/local_costmap'
+        )
+
+        try:
+            state = await self.node.get_lifecycle_state_async(node_name)
+            if state.id != lifecycle_msgs.msg.State.PRIMARY_STATE_ACTIVE:
+                self._logger.warn(
+                    f"local costmap not active (state={state.id}), skipping cycle"
+                )
+                return False
+
+            self._logger.warn(f"Deactivating local costmap: {node_name}")
+            ok = await self.node.change_lifecycle_state_async(
+                node_name,
+                lifecycle_msgs.msg.Transition.TRANSITION_DEACTIVATE,
+            )
+            if not ok:
+                self._logger.error("Failed to deactivate local costmap")
+                return False
+
+            # Brief pause to let deactivation complete
+            await asyncio.sleep(0.3)
+
+            self._logger.warn(f"Reactivating local costmap: {node_name}")
+            ok = await self.node.change_lifecycle_state_async(
+                node_name,
+                lifecycle_msgs.msg.Transition.TRANSITION_ACTIVATE,
+            )
+            if not ok:
+                self._logger.error("Failed to reactivate local costmap")
+                return False
+
+            self._logger.warn("Local costmap lifecycle cycle complete")
+            return True
+        except Exception as e:
+            self._logger.error(
+                f"Local costmap lifecycle cycle failed: {type(e).__name__}: {e}"
+            )
+            return False
 
     async def reset(
         self,
@@ -312,6 +421,8 @@ class RobotManager(NodeInterface):
                 )
         if goal_pos is not None:
             self._goal_pos = self._environment_manager.realize(goal_pos)
+            self._is_goal_reached = False  # reset so the new goal is actually navigated
+            self._goal_active = False
 
             if self._publish_goal_task is not None:
                 self._publish_goal_task.cancel()
@@ -350,7 +461,7 @@ class RobotManager(NodeInterface):
                 goal_msg.header.stamp = self.node.sim_time.to_msg()
                 goal_msg.pose = goal.to_msg()
                 self._goal_pub.publish(goal_msg)
-
+                self._goal_active = True
                 self._goal_start_time = self.node.sim_time
 
     async def _launch_robot(self, node_paths: set[str]):
@@ -429,6 +540,12 @@ class RobotManager(NodeInterface):
         """
         last_goal = next(reversed(list(data.status_list)), None)
         self._is_goal_reached = (last_goal is not None) and last_goal.status == action_msgs.msg.GoalStatus.STATUS_SUCCEEDED
+        if last_goal is None:
+            return
+        if not self._goal_active:
+            return
+        self._is_goal_reached = \
+            last_goal.status == action_msgs.msg.GoalStatus.STATUS_SUCCEEDED
 
     async def update(self):
         """Live - update some kwargs of robot

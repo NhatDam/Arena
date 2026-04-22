@@ -65,6 +65,11 @@ def Configuration(server: ROSParamServer):
                 parse=_positive_or_inf,
             )
 
+            AUTO_RESET = server.ROSParam[bool](
+                'auto_reset',
+                True,
+            )
+
         class Obstacles:
             OBSTACLE_MAX_RADIUS = server.ROSParam[float](
                 'obstacle_max_radius',
@@ -80,7 +85,7 @@ def Configuration(server: ROSParamServer):
 
             GOAL_TOLERANCE_ANGLE = server.ROSParam[float](
                 'goal_tolerance_angle',
-                30.0 * np.pi / 360.,
+                60.0 * np.pi / 360.,
             )
 
             SPAWN_ROBOT_SAFE_DIST = server.ROSParam[float](

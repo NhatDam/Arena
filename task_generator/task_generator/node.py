@@ -8,8 +8,10 @@ import arena_simulation_setup.tree.configs.environment
 import arena_simulation_setup.tree.configs.parametrized
 import arena_simulation_setup.tree.World as World
 import rclpy
+import sensor_msgs.msg
 import std_srvs.srv as std_srvs
 import task_generator_msgs.srv
+import tf2_ros
 from arena_rclpy_mixins import ArenaMixinNode
 from arena_rclpy_mixins.shared import Namespace
 from std_msgs.msg import Empty, Int16
@@ -167,23 +169,48 @@ class TaskGenerator(ArenaMixinNode, SafeCallbackNode):
     # RUNTIME
     async def reset_task(self, **kwargs):
         async with self._reset_lock:
-            self._start_time = self.sim_time
+            await self._reset_task_inner(**kwargs)
 
-            await self._simulator.before_reset_task()
+    async def _reset_task_inner(self, **kwargs):
+        """Inner reset logic — caller must hold _reset_lock."""
+        self.get_logger().info(
+            f"reset_task start: reset_index={self._number_of_resets} kwargs={kwargs}"
+        )
+        self._start_time = self.sim_time
 
-            self.get_logger().info("resetting")
+        await self._simulator.before_reset_task()
 
-            await self._task.reset(**kwargs)
+        self.get_logger().info("resetting")
+        await self._task.reset(**kwargs)
 
-            self._pub_task_reset.publish(Int16(data=self._number_of_resets))
-            self._number_of_resets += 1
-            self._send_end_message_on_end()
+        # Re-seat lidar render products after robot teleport, while still paused,
+        # so graphs are valid when the first tick fires after unpause.
+        try:
+            robots = [
+                rm.robot
+                for rm in self._robots_manager.managers.values()
+            ]
+            if robots:
+                ok = await self._simulator.robot_reset_sensors(robots)
+                self.get_logger().info(f"ResetSensors results: {ok}")
+            else:
+                self.get_logger().warn("ResetSensors: no robots found, skipping")
+        except Exception as e:
+            # Non-fatal — log and continue so reset isn't blocked
+            self.get_logger().warn(f"ResetSensors failed (non-fatal): {e}")
 
-            await self._simulator.after_reset_task()
+        self._pub_task_reset.publish(Int16(data=self._number_of_resets))
+        self._number_of_resets += 1
+        self._send_end_message_on_end()
 
-            self.get_logger().warn("=============")
-            self.get_logger().warn("Task Reset!")
-            self.get_logger().warn("=============")
+        await self._simulator.after_reset_task()
+        self.get_logger().info(
+            f"reset_task end: reset_index={self._number_of_resets - 1}"
+        )
+
+        self.get_logger().warn("=============")
+        self.get_logger().warn("Task Reset!")
+        self.get_logger().warn("=============")
 
     async def _check_task_status(self, *args, **kwargs):
         del args, kwargs
@@ -199,7 +226,15 @@ class TaskGenerator(ArenaMixinNode, SafeCallbackNode):
                 await asyncio.sleep(0.5)
                 async with self._reset_lock:
                     if await self._task.is_done:
-                        await self.reset_task()
+                        if not self.conf.General.AUTO_RESET.value:
+                            self.get_logger().warn(
+                                "Task is done but auto_reset is disabled. "
+                                "Skipping reset. Set 'auto_reset' param to True to re-enable.")
+                            # Wait until auto_reset is re-enabled or node is shut down
+                            while not self.conf.General.AUTO_RESET.value:
+                                await asyncio.sleep(1.0)
+                            continue
+                        await self._reset_task_inner()
         except asyncio.CancelledError:
             pass
         except Exception as e:
