@@ -1,0 +1,74 @@
+{
+  "robots": [
+    {
+      "start": [9.5, 10.0, 0.0],
+      "goal": [9.5, 30.0, 0.0]
+    }
+  ],
+  "dynamic": [
+    {
+      "name": "ped_lr_14_a",
+      "pos": [8.2, 16.4, 0.0],
+      "type": "adult",
+      "model": "male_adult_medical_01",
+      "waypoints": [[10.8, 16.4, 0.0]],
+      "behavior_tree": "./bt_flow_14.xml"
+    },
+    {
+      "name": "ped_lr_14_b",
+      "pos": [8.4, 16.8, 0.0],
+      "type": "adult",
+      "model": "female_adult_business_02",
+      "waypoints": [[10.8, 16.8, 0.0]],
+      "behavior_tree": "./bt_flow_14.xml"
+    },
+    {
+      "name": "ped_rl_15_a",
+      "pos": [10.8, 17.2, 3.14],
+      "type": "adult",
+      "model": "female_adult_medical_01",
+      "waypoints": [[8.2, 17.2, 3.14]],
+      "behavior_tree": "./bt_flow_15.xml"
+    },
+    {
+      "name": "ped_rl_15_b",
+      "pos": [10.6, 17.6, 3.14],
+      "type": "adult",
+      "model": "male_adult_construction_02",
+      "waypoints": [[8.2, 17.6, 3.14]],
+      "behavior_tree": "./bt_flow_15.xml"
+    },
+    {
+      "name": "ped_lr_16_a",
+      "pos": [8.2, 16.3, 0.0],
+      "type": "adult",
+      "model": "male_adult_construction_01",
+      "waypoints": [[10.8, 16.3, 0.0]],
+      "behavior_tree": "./bt_flow_16.xml"
+    },
+    {
+      "name": "ped_lr_16_b",
+      "pos": [8.3, 16.7, 0.0],
+      "type": "adult",
+      "model": "male_adult_medical_01",
+      "waypoints": [[10.8, 16.7, 0.0]],
+      "behavior_tree": "./bt_flow_16.xml"
+    },
+    {
+      "name": "ped_rl_17_a",
+      "pos": [10.8, 17.3, 3.14],
+      "type": "adult",
+      "model": "female_adult_police_01",
+      "waypoints": [[8.2, 17.3, 3.14]],
+      "behavior_tree": "./bt_flow_17.xml"
+    },
+    {
+      "name": "ped_rl_17_b",
+      "pos": [10.7, 17.7, 3.14],
+      "type": "adult",
+      "model": "male_adult_police_04",
+      "waypoints": [[8.2, 17.7, 3.14]],
+      "behavior_tree": "./bt_flow_17.xml"
+    }
+  ]
+}
