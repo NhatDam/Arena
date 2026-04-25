@@ -1,0 +1,28 @@
+{
+  "robots": [
+    {
+      "start": [2.75, 8.0, 0.0],
+      "goal": [4.0, 18.0, 0.0]
+    }
+  ],
+  "dynamic": [
+    {
+      "name": "pedestrian_doctor",
+      "id": 0,
+      "pos": [7.3, 8.0, 0.0],
+      "type": "adult",
+      "model": "male_adult_medical_01",
+      "waypoints": [[10.0, 7.5, 0.0]],
+      "behavior_tree": "./bt_doctor.xml"
+    },
+    {
+      "name": "pedestrian_nurse",
+      "id": 1,
+      "pos": [8.85, 11.5, 0.0],
+      "type": "adult",
+      "model": "female_adult_medical_01",
+      "waypoints": [[10.0, 7.5, 0.0]],
+      "behavior_tree": "./bt_nurse.xml"
+    }
+  ]
+}

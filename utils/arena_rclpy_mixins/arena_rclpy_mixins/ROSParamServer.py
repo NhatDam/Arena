@@ -292,6 +292,10 @@ class ROSParamServer(rclpy.node.Node):
                 f'initial configuration of parameter {param.name} failed with {result.reason}')
 
     def _callback(self, params: list[rclpy.Parameter]):
+        # --- THÊM 2 DÒNG NÀY VÀO ---
+        self.get_logger().warn(f"[DEBUG-PARAM] Incoming params from CLI: {[p.name for p in params]}")
+        self.get_logger().warn(f"[DEBUG-PARAM] Registered callback keys: {list(self._callbacks.keys())}")
+        # ---------------------------
         successful = True
         reason: list[str] = []
         for param in params:

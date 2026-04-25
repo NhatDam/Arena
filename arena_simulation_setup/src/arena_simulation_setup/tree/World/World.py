@@ -2,7 +2,6 @@ import io
 import os
 import tarfile
 import typing
-from typing import Optional, List
 from pathlib import Path
 
 import attrs
@@ -101,52 +100,16 @@ class WorldDescription:
     def render(
         self,
         resolution: float = 0.05,
-        *,
-        default_asset_bbox: Optional[tuple[tuple[float, float], tuple[float, float]]] = None,
-        asset_color: Optional[str] = None,
-        asset_name_color: Optional[str] = None,
     ) -> typing.Tuple[bytes, tuple[float, float]]:
-        """
-        Render the world description to a PNG image.
+        """Render the world description to a PNG image
 
         Args:
-            resolution (float): The resolution of the rendered image in meters per pixel.
-            default_asset_bbox (Optional[tuple[tuple[float, float], tuple[float, float]]]): Default bounding box ((xmin, xmax), (ymin, ymax)) to use for static entities if not specified individually.
-            asset_color (Optional[str]): Color used to fill static objects in the map.
-            asset_name_color (Optional[str]): Color used for static object names in the map.
+            resolution (float): The resolution of the rendered image [m/px]
 
         Returns:
-            Tuple[bytes, tuple[float, float]]: PNG image bytes and the origin (x, y) of the map.
-
-        Notes:
-            - Static objects are drawn only if their dimensions can be determined from bbox, width/height, or default_asset_bbox.
-            - If asset_color is None, static objects are not drawn.
+            typing.Tuple[bytes, tuple[float, float]]: The rendered image and its origin
         """
         import shapely
-        import shapely.affinity
-
-        map_kwargs: dict[str, typing.Any] = {}
-
-        if asset_color is not None:
-            static_objects: list[tuple[str, shapely.Polygon]] = []
-            for entity in self.all_static_entities:
-                try:
-                    bbox = entity.asdict(expand_extra=True).get('bbox')
-                    if bbox is None:
-                        if default_asset_bbox is None:
-                            raise ValueError(f"Static entity '{entity.name}' does not have a bbox and no default_asset_bbox was provided.")
-                        bbox = default_asset_bbox
-                    (x_min, x_max), (y_min, y_max), *_ = bbox
-                except Exception:
-                    continue
-                poly = shapely.box(x_min, y_min, x_max, y_max)
-                poly = shapely.affinity.rotate(poly, entity.pose.orientation.to_yaw(), use_radians=True)
-                poly = shapely.affinity.translate(poly, entity.pose.position.x, entity.pose.position.y)
-                static_objects.append((entity.name, poly))
-
-            map_kwargs["static_objects"] = static_objects
-            map_kwargs["asset_color"] = asset_color
-            map_kwargs["asset_name_color"] = asset_name_color
 
         png, origin = Map.generate_png(
             rooms=shapely.MultiPolygon([shapely.Polygon(zone.corners) for zone in self.zones]),
@@ -154,7 +117,6 @@ class WorldDescription:
             walls=shapely.MultiLineString(list(self.all_walls)),
             resolution=resolution,
             padding=5,
-            **map_kwargs,
         )
         return png, origin
 
@@ -162,7 +124,6 @@ class WorldDescription:
         self,
         resolution: float = 0.05,
         extra_files: dict[str, bytes] | None = None,
-        **kwargs
     ) -> tarfile.TarFile:
         """
         Export the world description to world.yaml, map.png, map.yaml
@@ -174,15 +135,7 @@ class WorldDescription:
 
         files['world.yaml'] = typing.cast(bytes, yaml.safe_dump(converter.unstructure(self), encoding='utf-8', sort_keys=False))
 
-        render_args: dict[str, typing.Any] = {"resolution": resolution}
-        if "default_asset_bbox" in kwargs:
-            render_args["default_asset_bbox"] = kwargs["default_asset_bbox"]
-        if "asset_color" in kwargs:
-            render_args["asset_color"] = kwargs["asset_color"]
-        if "asset_name_color" in kwargs:
-            render_args["asset_name_color"] = kwargs["asset_name_color"]
-
-        files['map/map.png'], origin = self.render(**render_args)
+        files['map/map.png'], origin = self.render(resolution=resolution)
 
         files['map/map.yaml'] = Map.generate_map_yaml(resolution=resolution, filename='map.png', origin=origin).encode('utf-8')
 
@@ -240,7 +193,8 @@ class World(PathView):
         os.makedirs(self.path, exist_ok=True)
         tarball = world.export(**kwargs)
 
-        if not hasattr(tarfile, 'data_filter'):
+        # compat python 3.10.0
+        if not hasattr(tarfile.TarFile, 'data_filter'):
             tarball.extractall(self.path)
             return self.path
 

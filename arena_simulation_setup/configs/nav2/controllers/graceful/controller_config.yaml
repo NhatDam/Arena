@@ -15,7 +15,7 @@ controller_plugins_dict:
     beta: 0.4
     lambda: 2.0
     v_linear_min: 0.1
-    v_linear_max: 0.5
+    v_linear_max: 1.0
     v_angular_max: 5.0
     v_angular_min_in_place: 0.25
     slowdown_radius: 1.5

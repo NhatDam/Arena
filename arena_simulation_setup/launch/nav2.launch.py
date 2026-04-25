@@ -1,8 +1,7 @@
 import os
 
 from arena_bringup.future import PythonExpression
-from arena_bringup.substitutions import (LaunchArgument, VelSmootherAccelSubstitution, VelSmootherSubstitution,
-                                         YAMLFileSubstitution,
+from arena_bringup.substitutions import (LaunchArgument, YAMLFileSubstitution,
                                          YAMLMergeSubstitution,
                                          YAMLReplaceSubstitution,
                                          YAMLRetrieveSubstitution)
@@ -44,7 +43,7 @@ def generate_launch_description():
                 'model_params.yaml'
             ])
         ),
-        robot_model_params_yaml := YAMLFileSubstitution(
+        YAMLFileSubstitution(
             PathJoinSubstitution([
                 robots_root,
                 'robots',
@@ -62,6 +61,17 @@ def generate_launch_description():
                 local_planner.substitution,
                 'controller_config.yaml'
             ])
+        ),
+        # Load robot-specific controller overrides (optional, falls back to empty dict)
+        YAMLFileSubstitution(
+            PathJoinSubstitution([
+                robots_root,
+                'robots',
+                robot.substitution,
+                'configs',
+                'controller_config.yaml'
+            ]),
+            default={},
         ),
         # Load controller-specific configuration based on global_planner argument
         YAMLFileSubstitution(
@@ -134,11 +144,6 @@ def generate_launch_description():
                     ),
                     'bt_navigator/ros__parameters/plugin_lib_names'
                 ),
-                'vel_smoother_max_velocity': VelSmootherSubstitution(robot_model_params_yaml, use_max=True),
-                'vel_smoother_min_velocity': VelSmootherSubstitution(robot_model_params_yaml, use_max=False),
-                # Acceleration / deceleration derived from actions.continuous
-                'vel_smoother_max_accel': VelSmootherAccelSubstitution(robot_model_params_yaml, decel=False),
-                'vel_smoother_max_decel': VelSmootherAccelSubstitution(robot_model_params_yaml, decel=True),
             },
             substitute=True
         ),
@@ -198,17 +203,13 @@ def generate_launch_description():
             name='goal_pose_relay',
             arguments=['/goal_pose', 'goal_pose'],
         ),
-        # pose_to_tf disabled: map→odom TF is now published by the dynamic TF broadcaster in
-        # gazebo_simulator.py (_publish_map_to_odom_tfs). pose_to_tf incorrectly published
-        # map→odom = raw Gazebo pose without accounting for DiffDrive accumulated odom offset,
-        # which would double-count wheel motion and place the robot at the wrong map position.
-        # Node(
-        #     package='pose_to_tf',
-        #     executable='pose_to_tf',
-        #     name='pose_to_tf',
-        #     parameters=[{'odom_frame': 'odom', 'pose_topic': 'pose'}],
-        #     output='screen'
-        # ),
+        Node(
+            package='pose_to_tf',
+            executable='pose_to_tf',
+            name='pose_to_tf',
+            parameters=[{'odom_frame': 'odom', 'pose_topic': 'pose'}],
+            output='screen'
+        ),
         # Node(
         #     package='tf2_ros',
         #     executable='static_transform_publisher',

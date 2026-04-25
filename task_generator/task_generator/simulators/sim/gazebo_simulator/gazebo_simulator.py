@@ -12,7 +12,7 @@ import rclpy.time
 import rclpy.duration
 import tf2_ros
 from arena_simulation_setup.tree.assets.Object import ObjectIdentifier
-from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, TransformStamped
+from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
 from ros_gz_interfaces.msg import Entity as EntityMsg
 from ros_gz_interfaces.msg import EntityFactory, WorldControl
 from ros_gz_interfaces.srv import ControlWorld, DeleteEntity, SetEntityPose, SpawnEntity
@@ -58,94 +58,6 @@ class GazeboSimulator(BaseSim):
         # Used to compute correct map→odom TF after robot teleportation
         self._tf_buffer = tf2_ros.Buffer()
         self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, self.node)
-
-        # Regular TF broadcaster for map→odom transforms.
-        self._map_to_odom_tfs: dict[str, TransformStamped] = {}
-        self._tf_broadcaster = tf2_ros.TransformBroadcaster(self.node)
-
-        # Periodically republish map→odom TFs so they don't expire in the TF buffer
-        self._tf_publish_timer = self.node.create_timer(
-            0.1, 
-            self._publish_map_to_odom_tfs,
-        )
-
-        # Gazebo ground-truth pose subscriptions for continuous map→odom correction.
-        # Keyed by odom_frame_name to avoid duplicates.
-        self._gz_pose_subs: dict[str, object] = {}
-
-    def _setup_gazebo_pose_tracking(self, robot_name: str, odom_frame: str, base_frame: str):
-        """Subscribe to robot's Gazebo ground-truth pose for continuous map→odom correction.
-
-        Instead of computing map→odom only at teleportation time (which is fragile
-        due to DiffDrive odom jumps after sim unpause), this continuously derives
-        map→odom from the actual Gazebo world pose and the current odom→base_link TF:
-            map→odom = gazebo_world_pose × inv(odom→base_link)
-        """
-        if odom_frame in self._gz_pose_subs:
-            return
-
-        pose_topic = self.node.service_namespace(robot_name, "pose")
-
-        def pose_callback(msg: PoseStamped):
-            try:
-                odom_tf = self._tf_buffer.lookup_transform(
-                    odom_frame, base_frame, rclpy.time.Time()
-                )
-
-                odom_x = odom_tf.transform.translation.x
-                odom_y = odom_tf.transform.translation.y
-                odom_yaw = self._quaternion_to_yaw(
-                    odom_tf.transform.rotation.x, odom_tf.transform.rotation.y,
-                    odom_tf.transform.rotation.z, odom_tf.transform.rotation.w,
-                )
-
-                gz_yaw = self._quaternion_to_yaw(
-                    msg.pose.orientation.x, msg.pose.orientation.y,
-                    msg.pose.orientation.z, msg.pose.orientation.w,
-                )
-
-                tf_yaw = gz_yaw - odom_yaw
-                cos_tf = math.cos(tf_yaw)
-                sin_tf = math.sin(tf_yaw)
-                tf_x = msg.pose.position.x - (odom_x * cos_tf - odom_y * sin_tf)
-                tf_y = msg.pose.position.y - (odom_x * sin_tf + odom_y * cos_tf)
-
-                ts = TransformStamped()
-                ts.header.stamp = self.node.get_clock().now().to_msg()
-                ts.header.frame_id = "map"
-                ts.child_frame_id = odom_frame
-                ts.transform.translation.x = tf_x
-                ts.transform.translation.y = tf_y
-                ts.transform.translation.z = msg.pose.position.z
-                qx, qy, qz, qw = self._yaw_to_quaternion(tf_yaw)
-                ts.transform.rotation.x = qx
-                ts.transform.rotation.y = qy
-                ts.transform.rotation.z = qz
-                ts.transform.rotation.w = qw
-
-                self._map_to_odom_tfs[odom_frame] = ts
-            except (tf2_ros.LookupException, tf2_ros.ConnectivityException,
-                    tf2_ros.ExtrapolationException):
-                pass  # odom→base not available yet
-
-        self._gz_pose_subs[odom_frame] = self.node.create_subscription(
-            PoseStamped,
-            pose_topic,
-            pose_callback,
-            10,
-        )
-        self._logger.info(
-            f"Tracking Gazebo ground-truth pose on {pose_topic} for map→{odom_frame}"
-        )
-
-    def _publish_map_to_odom_tfs(self):
-        """Periodically republish all map→odom TFs with current sim time."""
-        if not self._map_to_odom_tfs:
-            return
-        now = self.node.get_clock().now().to_msg()
-        for ts in self._map_to_odom_tfs.values():
-            ts.header.stamp = now
-        self._tf_broadcaster.sendTransform(list(self._map_to_odom_tfs.values()))
 
     async def before_reset_task(self):
         self._logger.warn("Pausing simulation before reset")
@@ -359,6 +271,7 @@ class GazeboSimulator(BaseSim):
                 return False
 
     async def _delete_entity(self, name: str):
+        return True
         async with self._semaphore:
             name = name
 
@@ -568,9 +481,7 @@ class GazeboSimulator(BaseSim):
                 parameters=[
                     {"use_sim_time": True},
                     {"robot_description": description},
-                    # used throughout nav2, collision_monitor, and static TF publishers.
-                    # e.g. "jackal_" - jackal_base_link, jackal_lidar_link
-                    {"frame_prefix": str(robot.frame) + "_"},
+                    {"frame_prefix": robot.frame + "/"},  # add trailing slash
                 ],
             )
         )
@@ -726,14 +637,12 @@ class GazeboSimulator(BaseSim):
             odom_frame = robot_config.model_params.odom_frame
             base_frame = robot_config.model_params.base_frame
 
-            # Get sanitized frame names (FrameNamespace.auto_sanitize replaces '/' with '_')
-            # These must match the frame_id/child_frame_id in the DiffDrive plugin
-            odom_frame_name = str(robot.frame(odom_frame))
-            base_frame_name = str(robot.frame(base_frame))
+            # Get frame names as raw strings (FrameNamespace.__str__ is sanitized
+            # by auto_sanitize, but TF frames in the tree use unsanitized '/' names)
+            odom_frame_name = str.__str__(robot.frame(odom_frame))
+            base_frame_name = str.__str__(robot.frame(base_frame))
 
-            # Compute an initial map→odom estimate using the current odom reading.
-            # The Gazebo ground-truth pose subscription will continuously correct it
-            # once the sim unpauses (handles DiffDrive odom jumps after teleportation).
+            # Compute the correct map→odom TF accounting for DiffDrive odom offset
             tf_x, tf_y, tf_z, tf_qx, tf_qy, tf_qz, tf_qw = self._compute_map_to_odom_tf(
                 desired_x=robot.pose.position.x,
                 desired_y=robot.pose.position.y,
@@ -746,24 +655,24 @@ class GazeboSimulator(BaseSim):
                 base_frame_name=base_frame_name,
             )
 
-            ts = TransformStamped()
-            ts.header.stamp = self.node.get_clock().now().to_msg()
-            ts.header.frame_id = "map"
-            ts.child_frame_id = odom_frame_name
-            ts.transform.translation.x = tf_x
-            ts.transform.translation.y = tf_y
-            ts.transform.translation.z = tf_z
-            ts.transform.rotation.x = tf_qx
-            ts.transform.rotation.y = tf_qy
-            ts.transform.rotation.z = tf_qz
-            ts.transform.rotation.w = tf_qw
-            self._map_to_odom_tfs[odom_frame_name] = ts
-            self._tf_broadcaster.sendTransform(list(self._map_to_odom_tfs.values()))
-
-            # Set up continuous ground-truth tracking from Gazebo pose topic.
-            # This corrects for DiffDrive odom jumps after teleportation and
-            # any accumulated odometry drift over time.
-            self._setup_gazebo_pose_tracking(robot.name, odom_frame_name, base_frame_name)
+            transform_pub_node = launch_ros.actions.Node(
+                package="tf2_ros",
+                executable="static_transform_publisher",
+                name="map_to_odomframe_publisher",
+                arguments=[
+                    str(tf_x),
+                    str(tf_y),
+                    str(tf_z),
+                    str(tf_qx),
+                    str(tf_qy),
+                    str(tf_qz),
+                    str(tf_qw),
+                    "map",
+                    robot.frame(odom_frame),
+                ],
+                parameters=[{"use_sim_time": True}],
+            )
+            await self.node.do_launch(launch.LaunchDescription([transform_pub_node]))
 
             return True
 

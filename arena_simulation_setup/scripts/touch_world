@@ -1,6 +1,5 @@
 #! /usr/bin/env python
 import argparse
-import ast
 import os
 from pathlib import Path
 
@@ -9,31 +8,10 @@ from arena_simulation_setup.tree.World import World
 parser = argparse.ArgumentParser(description='Touch world and regenerate its description.')
 parser.add_argument('world_name', type=str, help='Name of the world to touch.')
 parser.add_argument('--all', action='store_true', help='Modify all files, not just the map.')
-parser.add_argument('--assets', help='Color to draw assets in.', default=None)
-parser.add_argument('--assets-label', help='Color to draw asset labels in.', default=None)
-parser.add_argument('--assets-bbox', help='Default bounding box for static entities as ((xmin, xmax), (ymin, ymax)).', default=None)
-parser.add_argument('--resolution', type=float, help='Resolution of the generated map in meters per pixel.', default=None)
 args = parser.parse_args()
-
-kwargs = {}
-if args.resolution is not None:
-    kwargs['resolution'] = args.resolution
-
-if args.assets_bbox is not None:
-    try:
-        kwargs['default_asset_bbox'] = ast.literal_eval(args.assets_bbox)
-    except Exception as e:
-        print(f"Error parsing assets_bbox: {e}")
-        exit(1)
 
 base_dir = os.getcwd()
 if (arena_dir := os.environ.get('ARENA_DIR')) is not None:
     base_dir = os.path.join(arena_dir, 'arena_simulation_setup', 'worlds')
 world = World(Path(os.path.join(base_dir, args.world_name)))
-world.save(
-    world.load(),
-    map_only=not args.all,
-    asset_color=args.assets,
-    asset_name_color=args.assets_label,
-    **kwargs,
-)
+world.save(world.load(), map_only=not args.all)

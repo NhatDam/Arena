@@ -3,4 +3,4 @@ controller_plugins:
 controller_plugins_dict:
   FollowPath:
     plugin: "nav2py_sicnav_controller::SicnavController"
-    odom_topic: "/task_generator_node/jackal/odom"
+    odom_topic: "${namespace}/odom"

@@ -1,0 +1,70 @@
+{
+  "robots": [
+    {
+      "start": [
+        9.5,
+        10.0,
+        0.0
+      ],
+      "goal": [
+        9.5,
+        30.0,
+        0.0
+      ]
+    }
+  ],
+  "dynamic": [
+    {
+      "name": "pedestrian_1",
+      "id": 0,
+      "pos": [
+        9.5,
+        23.0,
+        0.0
+      ],
+      "type": "adult",
+      "model": "female_adult_medical_01",
+      "waypoints": [],
+      "behavior_tree": "./bt_1.xml"
+    },
+    {
+      "name": "pedestrian_2",
+      "id": 0,
+      "pos": [
+        10.5,
+        24.0,
+        0.0
+      ],
+      "type": "adult",
+      "model": "female_adult_medical_01",
+      "waypoints": [],
+      "behavior_tree": "./bt_2.xml"
+    },
+    {
+      "name": "pedestrian_3",
+      "id": 0,
+      "pos": [
+        11.5,
+        23.2,
+        0.0
+      ],
+      "type": "adult",
+      "model": "female_adult_medical_01",
+      "waypoints": [],
+      "behavior_tree": "./bt_3.xml"
+    },
+    {
+      "name": "pedestrian_4",
+      "id": 0,
+      "pos": [
+        10.5,
+        23.0,
+        0.0
+      ],
+      "type": "adult",
+      "model": "female_adult_medical_01",
+      "waypoints": [],
+      "behavior_tree": "./bt_4.xml"
+    }
+  ]
+}

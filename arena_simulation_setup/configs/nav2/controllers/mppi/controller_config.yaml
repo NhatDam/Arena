@@ -9,22 +9,25 @@ controller_plugins_dict:
    vx_std: 0.2
    vy_std: 0.2
    wz_std: 0.4
-   vx_max: 0.5
+   vx_max: 2.0
    vx_min: -0.35
-   vy_max: 0.5
+   vy_max: 2.0
+   vy_min: -2.0
    wz_max: 1.9
+   wz_min: -1.9
    ax_max: 3.0
    ax_min: -3.0
    ay_max: 3.0
    az_max: 3.5
    iteration_count: 1
-   prune_distance: 1.7
+   prune_distance: 4.0
    transform_tolerance: 0.1
    temperature: 0.3
    gamma: 0.015
    motion_model: "DiffDrive"
    visualize: false
    reset_period: 1.0
+   xy_goal_tolerance: 0.5
    regenerate_noises: false
    TrajectoryVisualizer:
      trajectory_step: 5

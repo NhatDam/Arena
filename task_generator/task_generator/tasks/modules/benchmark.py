@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import json
 import logging
@@ -7,11 +8,12 @@ import time
 import typing
 from logging import FileHandler, Formatter, StreamHandler
 
-import rclpy
 import yaml
 from ament_index_python.packages import get_package_share_directory
-from rcl_interfaces.srv import DescribeParameters, SetParameters
+from geometry_msgs.msg import PoseStamped
+from hunav_msgs.srv import StartEvaluation
 from rclpy.parameter import Parameter
+from std_srvs.srv import Empty
 
 from task_generator.constants import Constants
 from task_generator.tasks.modules import TM_Module
@@ -186,12 +188,7 @@ class Mod_Benchmark(TM_Module):
     DIR = pathlib.Path(os.path.join(get_package_share_directory("arena_bringup"), "configs", "benchmark"))
     LOCK_FILE = "resume.lock"
     LOG_DIR = DIR / "logs"
-    PARAM_SET_TIMEOUT = 5.0
-    PARAM_SET_RETRIES = 3
-    PARAM_SET_BACKOFF = 2.0
-    RESET_RETRY_LIMIT = 5
-    RESET_RETRY_DELAY = 10.0
-    SERVICE_WAIT_TIMEOUT = 15.0
+
 
     _config: _Config
     _suite: Suite
@@ -237,32 +234,6 @@ class Mod_Benchmark(TM_Module):
         namespace = os.path.normpath(namespace)
         return os.path.join("/", namespace) if namespace else self.node.service_namespace()
 
-    def _validate_parameters(self, param_names):
-        logger = self._logger
-        clean_node_name = self._primary_node
-        service_name = os.path.join(clean_node_name, "describe_parameters")
-        logger.debug(f"Creating client for service: {service_name}")
-        describe_client = self.node.create_client(DescribeParameters, service_name)
-        if not describe_client.wait_for_service(timeout_sec=self.SERVICE_WAIT_TIMEOUT):
-            logger.warning(f"DescribeParameters service not available for {clean_node_name}")
-            return []
-        request = DescribeParameters.Request()
-        request.names = param_names
-        try:
-            future = describe_client.call_async(request)
-            rclpy.spin_until_future_complete(self.node, future, timeout_sec=self.PARAM_SET_TIMEOUT)
-            if (result := future.result()):
-                valid_params = [desc.name for desc in result.descriptors]
-                logger.debug(f"Valid parameters for {clean_node_name}: {valid_params}")
-                return valid_params
-            else:
-                logger.warning(f"Failed to describe parameters for {clean_node_name}")
-                return []
-        except Exception as e:
-            logger.warning(f"Error validating parameters for {clean_node_name}: {e}")
-            return []
-        finally:
-            self.node.destroy_client(describe_client)
 
     def _set_node_parameters(self, suite_config):
         """
@@ -314,60 +285,25 @@ class Mod_Benchmark(TM_Module):
                     logger.error(f"[Benchmark] Could not set scenario file: {e}")
                     return False
 
+        # Apply per-stage timeout
+        try:
+            stage_timeout = float(suite_config.timeout)
+            if self.node.conf.Robot.TIMEOUT.value != stage_timeout:
+                self.node.conf.Robot.TIMEOUT.value = stage_timeout
+                logger.info(f"[Benchmark] Timeout → {stage_timeout}s")
+                updated = True
+        except Exception as e:
+            logger.warning(f"[Benchmark] Could not set stage timeout: {e}")
+
         if not updated:
             logger.debug("[Benchmark] No parameter changes for this stage.")
         return True
 
-        clean_node_name = self._primary_node
-        logger.debug(f"Setting parameters for {clean_node_name}")
-
-        params_to_set = [
-            ('tm_robots', Parameter.Type.STRING, suite_config.tm_robots.value),
-            ('tm_obstacles', Parameter.Type.STRING, suite_config.tm_obstacles.value)
-        ]
-
-        # Check if parameters are declared
-        # valid_params = self._validate_parameters([name for name, _, _ in params_to_set])
-        # if not all(name in valid_params for name, _, _ in params_to_set):
-        #     logger.warning(f"Parameters {', '.join(name for name, _, _ in params_to_set if name not in valid_params)} not declared on {clean_node_name}. Please declare them in task_generator_node.py.")
-        #     return False
-
-        service_name = os.path.join(clean_node_name, "set_parameters")
-        logger.debug(f"Creating client for service: {service_name}")
-        set_client = self.node.create_client(SetParameters, service_name)
-        if not set_client.wait_for_service(timeout_sec=self.SERVICE_WAIT_TIMEOUT):
-            logger.warning(f"SetParameters service not available for {clean_node_name}")
-            return False
-
-        success = True
-        for name, param_type, value in params_to_set:
-            for attempt in range(self.PARAM_SET_RETRIES):
-                try:
-                    param = Parameter(name, param_type, value)
-                    request = SetParameters.Request()
-                    request.parameters = [param.to_parameter_msg()]
-                    future = set_client.call_async(request)
-                    rclpy.spin_until_future_complete(self.node, future, timeout_sec=self.PARAM_SET_TIMEOUT)
-                    if future.result() and all(r.successful for r in future.result().results):
-                        logger.info(f"Set parameter {name}={value} on {clean_node_name}")
-                        break
-                    else:
-                        logger.warning(f"Failed to set {name} on {clean_node_name}: {future.result().results[0].reason if future.result() else 'No result'}")
-                        time.sleep(self.PARAM_SET_BACKOFF)
-                except Exception as e:
-                    logger.warning(f"Error setting {name} on {clean_node_name} (attempt {attempt+1}/{self.PARAM_SET_RETRIES}): {e}")
-                    time.sleep(self.PARAM_SET_BACKOFF)
-            else:
-                logger.error(f"Failed to set {name} on {clean_node_name} after {self.PARAM_SET_RETRIES} attempts")
-                success = False
-
-        self.node.destroy_client(set_client)
-        return success
-
     def __init__(self, task, **kwargs):
-        super().__init__(task, **kwargs)
+        super().__init__(task=task, **kwargs)
 
         self.needs_reincarnation: bool = True
+        self._hunav_recording: bool = False
 
         self._runid = f"t{int(time.time())}"
         # Log detected task_generator_nodes
@@ -379,8 +315,16 @@ class Mod_Benchmark(TM_Module):
         self._contest = self._load_contest(self._config.contest.config)
         self._episode_index = -1
         self._contest_index = self._contest.min_index
-        self._suite_index = self._suite.min_index
+        self._suite_index = Suite.Index(self._suite.min_index - 1)
         self._headless = 1
+
+        # Hunav evaluator service clients (absolute names – evaluator runs in root namespace)
+        self._hunav_start_client = self.node.create_client(
+            StartEvaluation, '/hunav_start_recording'
+        )
+        self._hunav_stop_client = self.node.create_client(
+            Empty, '/hunav_stop_recording'
+        )
 
         os.makedirs(self.LOG_DIR, exist_ok=True)
         with open(self.LOG_DIR / f"{self._runid}.log", "w") as f:
@@ -389,29 +333,151 @@ class Mod_Benchmark(TM_Module):
             f.write(f"suite {self._suite.name}\n")
 
         self._log_contest()
-        self._log_suite()
+        # suite_index starts at -1; first before_reset() will advance to 0
         # self._reincarnate()
+
+    # ---- hunav evaluator helpers ----
+
+    def _hunav_start_recording(self):
+        """Call hunav_start_recording service (non-blocking fire-and-forget)."""
+        logger = self._logger
+
+        if not self._hunav_start_client.service_is_ready():
+            logger.warning("[Benchmark] hunav_start_recording service not available – metrics will NOT be recorded")
+            return
+
+        contest_cfg = self._contest.config(self._contest_index)
+        suite_cfg = self._suite.config(self._suite_index)
+
+        # Build a meaningful experiment tag:  <planner>_<stage>_ep<N>
+        experiment_tag = f"{contest_cfg.name}_{suite_cfg.name}_ep{self._episode_index}"
+
+        # Try to get the robot goal from the first robot manager
+        robot_goal = PoseStamped()
+        try:
+            first_robot = next(iter(self._TASK.robots.values()), None)
+            if first_robot is not None:
+                goal_pose = first_robot.goal_pos
+                if goal_pose is not None:
+                    robot_goal.header.frame_id = "map"
+                    robot_goal.header.stamp = self.node.get_clock().now().to_msg()
+                    robot_goal.pose = goal_pose.to_msg()
+        except Exception as e:
+            logger.debug(f"[Benchmark] Could not retrieve robot goal for evaluator: {e}")
+
+        request = StartEvaluation.Request()
+        request.experiment_tag = experiment_tag
+        request.robot_goal = robot_goal
+        request.run_id = int(self._runid.lstrip('t')) % (2**31)
+
+        # Fire-and-forget: never block the node's executor
+        self._hunav_recording = True
+        logger.info(f"[Benchmark] Requesting hunav start recording: {experiment_tag}")
+        future = self._hunav_start_client.call_async(request)
+        future.add_done_callback(
+            lambda f: self._on_hunav_start_result(f, experiment_tag)
+        )
+
+    def _on_hunav_start_result(self, future, experiment_tag):
+        """Async callback – logs the evaluator's response."""
+        try:
+            result = future.result()
+            if result and result.success:
+                self._logger.info(f"[Benchmark] Hunav evaluator confirmed recording: {experiment_tag}")
+            else:
+                self._logger.warning(f"[Benchmark] Hunav evaluator rejected recording (tag={experiment_tag})")
+                self._hunav_recording = False
+        except Exception as e:
+            self._logger.error(f"[Benchmark] hunav_start_recording callback error: {e}")
+            self._hunav_recording = False
+
+    def _hunav_stop_recording(self):
+        """Call hunav_stop_recording service (non-blocking fire-and-forget)."""
+        if not self._hunav_recording:
+            return
+
+        logger = self._logger
+        self._hunav_recording = False
+
+        if not self._hunav_stop_client.service_is_ready():
+            logger.warning("[Benchmark] hunav_stop_recording service not available")
+            return
+
+        logger.info("[Benchmark] Requesting hunav stop recording")
+        future = self._hunav_stop_client.call_async(Empty.Request())
+        future.add_done_callback(self._on_hunav_stop_result)
+
+    def _on_hunav_stop_result(self, future):
+        """Async callback - logs stop recording result."""
+        try:
+            future.result()
+            self._logger.info("[Benchmark] Hunav evaluator stopped recording – metrics computed")
+        except Exception as e:
+            self._logger.error(f"[Benchmark] hunav_stop_recording callback error: {e}")
 
     def before_reset(self):
         self._logger.debug("Before task reset")
+        # Stop hunav recording for the previous episode (if active)
+        self._hunav_stop_recording()
         if self.needs_reincarnation:
             self.needs_reincarnation = False
             self._episode_index = -1
+
+            # Remember the TM types BEFORE reincarnation updates conf
+            old_tm_robots = self.node.conf.TaskMode.TM_ROBOTS.value
+            old_tm_obstacles = self.node.conf.TaskMode.TM_OBSTACLES.value
+
             self.suite_index += 1
             self._reincarnate()
 
+            # Only force TM re-instantiation when the TM *type* has actually
+            # changed (e.g. RANDOM → SCENARIO).  _reset_task() already checked
+            # the TM type BEFORE calling before_reset(), so if the type changed
+            # during _reincarnate() we must apply it now.
+            #
+            # When the TM type stays the same (e.g. SCENARIO → SCENARIO with a
+            # different scenario file), do NOT re-instantiate: the existing
+            # TM_Scenario._config ROSParam callback was already triggered by
+            # _set_node_parameters() and the instance already holds the new
+            # scenario data.  Re-instantiating would discard that state and
+            # register duplicate ROSParam callbacks.
+            new_tm_robots = self.node.conf.TaskMode.TM_ROBOTS.value
+            new_tm_obstacles = self.node.conf.TaskMode.TM_OBSTACLES.value
+
+            if new_tm_robots != old_tm_robots:
+                self._TASK.set_tm_robots(new_tm_robots)
+                self._logger.info(
+                    f"[Benchmark] TM type changed: robots {old_tm_robots} → {new_tm_robots}"
+                )
+
+            if new_tm_obstacles != old_tm_obstacles:
+                self._TASK.set_tm_obstacles(new_tm_obstacles)
+                self._logger.info(
+                    f"[Benchmark] TM type changed: obstacles {old_tm_obstacles} → {new_tm_obstacles}"
+                )
+
+            if new_tm_robots == old_tm_robots and new_tm_obstacles == old_tm_obstacles:
+                self._logger.info(
+                    f"[Benchmark] TM types unchanged ({new_tm_robots}, {new_tm_obstacles})"
+                    " — scenario file updated via ROSParam callback"
+                )
+
     def after_reset(self):
-        self._logger.debug(f"Episode: {self._episode_index + 1}")
         self._episode_index += 1
+        self._hunav_start_recording()
+        self._log_episode()
         episode_limit = int(self._suite.config(self._suite_index).episodes * self._config.suite.scale_episodes)
-        if self._episode_index < episode_limit - 1:
-            # self._reset_task()
-            pass
-        else:
+        if self._episode_index >= episode_limit:
             self.needs_reincarnation = True
 
     def _reset_task(self):
-        self._TASK.reset()
+        result = self._TASK.reset()
+        if asyncio.iscoroutine(result):
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(result)
+            except RuntimeError:
+                asyncio.run(result)
 
     @property
     def _logger(self) -> logging.Logger:  # type: ignore
@@ -495,5 +561,9 @@ class Mod_Benchmark(TM_Module):
 
         if not success:
             logger.error(f"Failed to set parameters for {suite_config.name} on any task_generator_node. Ensure tm_robots and tm_obstacles are declared in task_generator_node.py.")
-        self._reset_task()
-        self._episode = 0
+        # self._episode = 0
+        # self._reset_task()
+        # NOTE: Do NOT call _reset_task() or set _episode here.
+        # The framework reset cycle that called before_reset() will continue
+        # with __tm_robots.reset() / __tm_obstacles.reset() using the params
+        # we just set above.  after_reset() handles the episode counter.

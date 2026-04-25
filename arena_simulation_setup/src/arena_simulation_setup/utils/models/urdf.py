@@ -64,20 +64,33 @@ class ModelProvider_URDF(ModelProvider.provides(ModelType.URDF)):
             tree = ET.parse(model_path)
             root = tree.getroot()
 
-            prefix = "package://jackal_description"
+            def resolve_package_uri(uri: str) -> str | None:
+                """Resolve a package:// URI to an absolute filesystem path."""
+                if not uri.startswith("package://"):
+                    return None
+                rest = uri[len("package://"):]
+                parts = rest.split("/", 1)
+                if len(parts) != 2:
+                    return None
+                pkg_name, rel_path = parts
+                try:
+                    from ament_index_python.packages import get_package_share_directory
+                    pkg_dir = get_package_share_directory(pkg_name)
+                    return os.path.join(pkg_dir, rel_path)
+                except Exception:
+                    return None
 
             # Iterate over every element in the XML tree and update 'filename' attributes
             for elem in root.iter():
                 if 'filename' in elem.attrib:
                     original_path = elem.attrib['filename']
-                    # Remove the specific package prefix if present
-                    if original_path.startswith(prefix):
-                        # Remove the prefix and any leading '/'
-                        new_relative = original_path[len(prefix):].lstrip('/')
-                        original_path = new_relative
-                        print(f"Removed prefix: {prefix} -> New relative path: {original_path}")
-                    # Convert to absolute path if it's not already
-                    if not os.path.isabs(original_path):
+                    # Resolve package:// URIs to absolute paths
+                    resolved = resolve_package_uri(original_path)
+                    if resolved is not None:
+                        elem.attrib['filename'] = resolved
+                        print(f"Resolved package URI to absolute: {original_path} -> {resolved}")
+                    # Convert remaining relative paths to absolute
+                    elif not os.path.isabs(original_path):
                         abs_path = os.path.abspath(os.path.join(base_dir, original_path))
                         elem.attrib['filename'] = abs_path
                         print(f"Updated relative path to absolute: {original_path} -> {abs_path}")

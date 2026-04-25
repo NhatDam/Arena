@@ -1,3 +1,7 @@
+robots:
+  - start: [2.0, 2.0, 0.0]   # Tọa độ xuất phát [x, y, góc yaw]
+    goal: [10.0, 10.0, 0.0]  # Tọa độ đích đến [x, y, góc yaw]
+
 dynamic:
 - behavior_tree: ./hunav_1_behavior_tree.xml
   model: female_adult_business_02
@@ -38,7 +42,7 @@ dynamic:
   model: female_adult_medical_01
   name: hunav_6
   pose: [3.5, 1.5, 0]
-  waypoints:
+  waypoint:
     - [10,10,0]
 
 - behavior_tree: ./hunav_7_behavior_tree.xml

@@ -67,8 +67,9 @@ class BaseHumanSimulator(NodeInterface, abc.ABC):
         for obstacle in obstacles:
             if (known := self._known_obstacles.get(obstacle.name)) is not None:
                 known.obstacle = obstacle
-                to_move.append(known.obstacle)
-                known.layer = layer
+                if known.spawned:
+                    to_move.append(known.obstacle)
+                    known.layer = layer
             else:
                 known = self._known_obstacles.create_or_get(
                     name=obstacle.name,
@@ -112,8 +113,9 @@ class BaseHumanSimulator(NodeInterface, abc.ABC):
         for obstacle in obstacles:
             if (known := self._known_obstacles.get(obstacle.name)) is not None:
                 known.obstacle = obstacle
-                to_move.append(known.obstacle)
-                known.layer = ObstacleLayer.INUSE
+                if known.spawned:
+                    to_move.append(known.obstacle)
+                    known.layer = ObstacleLayer.INUSE
             else:
                 known = self._known_obstacles.create_or_get(
                     name=obstacle.name,

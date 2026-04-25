@@ -1,0 +1,161 @@
+{
+  "robots": [
+    {
+      "start": [
+        9.5,
+        10.0,
+        0.0
+      ],
+      "goal": [
+        9.5,
+        30.0,
+        0.0
+      ]
+    }
+  ],
+  "dynamic": [
+    {
+      "name": "pedestrian_1",
+      "model": "female_adult_medical_01",
+      "pose": [
+        7.5,
+        14.5,
+        0.0
+      ],
+      "velocity": 1.2,
+      "desired_velocity": 1.2,
+      "waypoint": [],
+      "behavior_tree": "./bt_1.xml"
+    },
+    {
+      "name": "pedestrian_2",
+      "model": "male_adult_medical_01",
+      "pose": [
+        11.5,
+        15.5,
+        180.0
+      ],
+      "velocity": 1.2,
+      "desired_velocity": 1.2,
+      "waypoint": [],
+      "behavior_tree": "./bt_2.xml"
+    },
+    {
+      "name": "pedestrian_3",
+      "model": "female_adult_medical_01",
+      "pose": [
+        8.5,
+        13.0,
+        90.0
+      ],
+      "velocity": 1.2,
+      "desired_velocity": 1.2,
+      "waypoint": [],
+      "behavior_tree": "./bt_3.xml"
+    },
+    {
+      "name": "pedestrian_4",
+      "model": "male_adult_construction_01",
+      "pose": [
+        7.5,
+        20.0,
+        0.0
+      ],
+      "velocity": 1.2,
+      "desired_velocity": 1.2,
+      "waypoint": [],
+      "behavior_tree": "./bt_4.xml"
+    },
+    {
+      "name": "pedestrian_5",
+      "model": "female_adult_business_02",
+      "pose": [
+        11.5,
+        20.5,
+        180.0
+      ],
+      "velocity": 1.2,
+      "desired_velocity": 1.2,
+      "waypoint": [],
+      "behavior_tree": "./bt_5.xml"
+    },
+    {
+      "name": "pedestrian_6",
+      "model": "male_adult_construction_02",
+      "pose": [
+        10.5,
+        19.0,
+        90.0
+      ],
+      "velocity": 1.2,
+      "desired_velocity": 1.2,
+      "waypoint": [],
+      "behavior_tree": "./bt_6.xml"
+    },
+    {
+      "name": "pedestrian_7",
+      "model": "female_adult_police_01",
+      "pose": [
+        8.0,
+        24.0,
+        45.0
+      ],
+      "velocity": 1.2,
+      "desired_velocity": 1.2,
+      "waypoint": [],
+      "behavior_tree": "./bt_7.xml"
+    },
+    {
+      "name": "pedestrian_8",
+      "model": "male_adult_police_04",
+      "pose": [
+        11.0,
+        24.0,
+        135.0
+      ],
+      "velocity": 1.2,
+      "desired_velocity": 1.2,
+      "waypoint": [],
+      "behavior_tree": "./bt_8.xml"
+    },
+    {
+      "name": "pedestrian_9",
+      "model": "female_adult_medical_01",
+      "pose": [
+        7.5,
+        26.5,
+        0.0
+      ],
+      "velocity": 1.2,
+      "desired_velocity": 1.2,
+      "waypoint": [],
+      "behavior_tree": "./bt_9.xml"
+    },
+    {
+      "name": "pedestrian_10",
+      "model": "male_adult_medical_01",
+      "pose": [
+        8.5,
+        27.5,
+        90.0
+      ],
+      "velocity": 1.2,
+      "desired_velocity": 1.2,
+      "waypoint": [],
+      "behavior_tree": "./bt_10.xml"
+    },
+    {
+      "name": "pedestrian_11",
+      "model": "female_adult_medical_01",
+      "pose": [
+        10.5,
+        29.5,
+        -90.0
+      ],
+      "velocity": 1.2,
+      "desired_velocity": 1.2,
+      "waypoint": [],
+      "behavior_tree": "./bt_11.xml"
+    }
+  ]
+}

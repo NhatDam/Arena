@@ -44,6 +44,7 @@ dependencies = [
     "colourings>=0.4.1",
     "aiofiles>=25.1.0",
     "torch>=1.13.1",
+    "torchvision>=0.14.1",
     "diffusers<0.22",
     "huggingface-hub<0.26.0",
     "transformers>4.30.0,<4.40.0",

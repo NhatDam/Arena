@@ -42,6 +42,10 @@
     {
       "name": "hunav",
       "path": "src/deps/hunav"
+    },
+    {
+      "name": "SocialWalker",
+      "path": "src/SocialWalker-lam_task1"
     }
   ],
   "settings": {

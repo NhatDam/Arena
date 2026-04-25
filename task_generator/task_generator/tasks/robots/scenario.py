@@ -35,6 +35,19 @@ class TM_Scenario(TM_Robots):
 
         SCENARIO_ROBOTS = self._config.value
 
+        # --- ADVANCE-DEBUG: log what scenario is active ---
+        _ros = self.node.get_logger()
+        _param_val = self.node.get_parameter_or('task.scenario.file', None)
+        _ros.warn(
+            f"[ADVANCE-DEBUG] TM_Scenario.reset(): "
+            f"param task.scenario.file={_param_val.value if _param_val else 'NOT_SET'}  "
+            f"num_robots_in_scenario={len(SCENARIO_ROBOTS) if SCENARIO_ROBOTS else 0}")
+        if SCENARIO_ROBOTS:
+            for i, rc in enumerate(SCENARIO_ROBOTS):
+                _ros.warn(
+                    f"[ADVANCE-DEBUG]   robot[{i}] start=({rc.start.position.x:.2f}, {rc.start.position.y:.2f}) "
+                    f"goal=({rc.goal.position.x:.2f}, {rc.goal.position.y:.2f})")
+
         # check robot manager length
         managed_robots = list(self._PROPS.robots.values())
 

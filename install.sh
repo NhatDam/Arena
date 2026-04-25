@@ -132,8 +132,7 @@ sudo apt-get install -y \
     nlohmann-json3-dev \
     libxtensor-dev \
     libceres-dev \
-    libsuitesparse-dev \
-    libnanoflann-dev
+    libsuitesparse-dev
 
 # Check if the default ROS sources.list file already exists
 ros_sources_list="/etc/ros/rosdep/sources.list.d/20-default.list"

@@ -20,6 +20,13 @@ if [ $_GIT -eq 1 ] ; then
     echo updating Arena...
     git pull --ff-only --autostash && git submodule update --recursive
     git submodule update --init --recursive arena_robots
+    # Update arena_training only if already initialized (update=none skips it otherwise)
+    if git submodule status arena_training 2>/dev/null | grep -qv '^-'; then
+        git submodule update arena_training || echo 'failed to update arena_training, ignoring'
+        pushd "$ARENA_DIR/arena_training" > /dev/null
+        git submodule update --recursive || echo 'failed to update arena_training submodules, ignoring'
+        popd > /dev/null
+    fi
 
     # re-source
     . "$ARENA_DIR/_meta/tools/source"
@@ -33,7 +40,6 @@ if [ $_GIT -eq 1 ] ; then
                 vcs import --input "$ARENA_DIR/_meta/repos/${name}.repos" --shallow --recursive --ff --add-existing "$ARENA_WS_DIR/src"  \
                 || echo "failed to pull all $name repos, ignoring"
             fi
-            (arena feature "$name" update || echo "failed to update feature $name, ignoring")
         done < "$INSTALLED"
     fi
 fi
@@ -48,15 +54,6 @@ fi
 if [ $_PYTHON -eq 1 ] ; then
     echo updating python deps...
     uv sync --inexact
-
-    if { [ -d "$ARENA_DIR/arena_training" ] && git submodule status arena_training 2>/dev/null | grep -qv '^-'; } || grep -qx 'training' "$INSTALLED" 2>/dev/null; then
-        echo updating training python deps...
-        pushd "$ARENA_DIR/arena_training" > /dev/null
-        uv pip install --python "$ARENA_DIR/.venv/bin/python" \
-            -e "." \
-            -e "./deps/rosnav_rl/rosnav_rl"
-        popd > /dev/null
-    fi
 fi
 
 # update links

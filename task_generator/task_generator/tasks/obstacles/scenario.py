@@ -11,7 +11,15 @@ class TM_Scenario(TM_Obstacles):
     _config: ROSParamT[Scenario]
 
     def _parse_scenario(self, scenario: str) -> Scenario:
-        return WorldIdentifier(self.node._world_manager.world_name).resolve_sync().scenario(scenario).resolve_sync().load()
+        import logging
+        logging.getLogger('scenario_debug').warning(f"[DEBUG] _parse_scenario called with: {scenario}")
+        try:
+            result = WorldIdentifier(self.node._world_manager.world_name).resolve_sync().scenario(scenario).resolve_sync().load()
+            logging.getLogger('scenario_debug').warning(f"[DEBUG] _parse_scenario SUCCESS: {scenario}")
+            return result
+        except Exception as e:
+            logging.getLogger('scenario_debug').warning(f"[DEBUG] _parse_scenario FAILED: {scenario} -> {e}")
+            raise
 
     async def reset(self, **kwargs) -> Obstacles:
         return self._config.value.static, self._config.value.dynamic

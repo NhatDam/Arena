@@ -1,9 +1,7 @@
-import logging
 import io
 import itertools
 import math
 import typing
-from collections.abc import Iterable
 from pathlib import Path
 
 import PIL.Image
@@ -32,24 +30,9 @@ class Map(PathView):
         walls: shapely.MultiLineString,
         resolution: float = 0.01,
         padding: int = 5,
-        *,
-        static_objects: Iterable[tuple[str, shapely.Polygon]] = (),
-        asset_color: str | None = "grey",
-        asset_name_color: str | None = "blue"
     ) -> tuple[bytes, tuple[float, float]]:
         """
         Generate a PNG image of the map with the given elements.
-
-        Args:
-            rooms (shapely.MultiPolygon): MultiPolygon representing the rooms in the map.
-            doors (shapely.MultiPolygon): MultiPolygon representing the doors in the map.
-            walls (shapely.MultiLineString): MultiLineString representing the walls in the map.
-            resolution (float): Size of each pixel in meters.
-            padding (int): Number of pixels to pad around the map.
-            show_obj_name (bool): Whether to display object names on the map.
-            static_objects (Optional[List[Tuple[str, shapely.Polygon]]]): Optional list of (name, Polygon) tuples for static objects to draw.
-            asset_color (str | None): Color used to fill static objects.
-            asset_name_color (str | None): Color used for static object names.
         """
         min_x, min_y, max_x, max_y = rooms.bounds
 
@@ -69,7 +52,7 @@ class Map(PathView):
 
         def tf(shape):
             shape = shapely.affinity.translate(shape, -min_x, -min_y)
-            shape = shapely.affinity.scale(shape, scaling_factor, -scaling_factor, origin=(0, 0))
+            shape = shapely.affinity.scale(shape, scaling_factor, -scaling_factor, origin=(0, 0))  # type: ignore
             shape = shapely.affinity.translate(shape, 0, height * scaling_factor)
             shape = shapely.set_precision(shape, 0.01)
             shape = shapely.make_valid(shape)
@@ -88,23 +71,10 @@ class Map(PathView):
             line = tf(shapely.LineString(wall))
             draw.line(as_int(line.coords), fill='black', width=1)
 
-        if asset_color is not None:
-            for name, obj in static_objects:
-                logging.debug(f"Drawing asset '{name}' with geometry: {obj} in color {asset_color}")
-                poly = tf(obj)
-                if len(poly.exterior.coords) < 3:
-                    logging.warning(f"Skipping asset '{name}' because it has insufficient geometry to draw ({len(poly.exterior.coords)} coordinates).")
-                    continue
-                draw.polygon(as_int(poly.exterior.coords), fill=asset_color)
-                if asset_name_color is not None:
-                    _min_x, _min_y, _max_x, _max_y = poly.bounds
-                    logging.debug(f"Drawing name for asset '{name}' at ({int(_max_x)}, {int(_max_y)}) color {asset_name_color}")
-                    draw.text((int(_max_x), int(_max_y)), name, fill=asset_name_color)
-
         img_bytes = io.BytesIO()
         img.save(img_bytes, format='PNG')
         img_bytes.seek(0)
-        return img_bytes.getvalue(), (min_x - padding * resolution, min_y - padding * resolution)
+        return img_bytes.getvalue(), (min_x + padding * resolution, min_y + padding * resolution)
 
     @classmethod
     def generate_map_yaml(cls, resolution: float, filename: str, origin: tuple[float, float]) -> str:

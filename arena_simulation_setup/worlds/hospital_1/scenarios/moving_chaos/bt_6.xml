@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root main_tree_to_execute="patrol_tree" BTCPP_format="4">
+  <TreeNodesModel>
+    <Action ID="SetGoal"><input_port name="agent_id" type="int"/><input_port name="target_x" type="double"/><input_port name="target_y" type="double"/><input_port name="goal_id" type="int"/></Action>
+    <Action ID="GoTo"><input_port name="agent_id" type="int"/><input_port name="goal_id" type="int"/><input_port name="time_step" type="double"/><input_port name="tolerance" type="int"/></Action>
+  </TreeNodesModel>
+  <BehaviorTree ID="patrol_tree">
+    <KeepRunningUntilFailure>
+      <Sequence>
+        <SetGoal agent_id="{id}" goal_id="1" target_x="10.5" target_y="19.0"/>
+        <GoTo agent_id="{id}" goal_id="1" time_step="0.1" tolerance="0.5" />
+        <SetGoal agent_id="{id}" goal_id="2" target_x="10.5" target_y="22.0"/>
+        <GoTo agent_id="{id}" goal_id="2" time_step="0.1" tolerance="0.5" />
+      </Sequence>
+    </KeepRunningUntilFailure>
+  </BehaviorTree>
+</root>

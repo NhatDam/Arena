@@ -420,51 +420,6 @@ class _YAMLReplacer:
         self._substitutions = substitutions
 
 
-class VelSmootherSubstitution(launch.Substitution):
-    """Derives a ``[lin_x, lin_y, ang_z]`` velocity limit list from the
-    ``actions.continuous`` block in a robot's *model_params.yaml*.
-
-    This removes the need for explicit ``vel_smoother_max_velocity`` /
-    ``vel_smoother_min_velocity`` parameters in every robot config file.
-    Holonomic robots may add a ``lateral_range`` key to ``actions.continuous``;
-    when absent, ``linear_range`` is used as the Y-axis fallback.
-    """
-
-    def __init__(self, model_params: YAMLFileSubstitution, *, use_max: bool):
-        launch.Substitution.__init__(self)
-        self._model_params = model_params
-        self._use_max = use_max  # True → upper bound (index 1), False → lower (index 0)
-
-    def perform(self, context: launch.LaunchContext):
-        params = self._model_params.perform_load(context)
-        continuous = (params.get("actions") or {}).get("continuous") or {}
-        idx = 1 if self._use_max else 0
-        lin = continuous.get("linear_range", [-1.0, 1.0])
-        lat = continuous.get("lateral_range", lin)  # holonomic fallback: Y == X
-        ang = continuous.get("angular_range", [-1.0, 1.0])
-        return [lin[idx], lat[idx], ang[idx]]
-
-
-class VelSmootherAccelSubstitution(launch.Substitution):
-    """Derives a ``[lin_x, lin_y, ang_z]`` acceleration or deceleration list
-    from the ``actions`` block in a robot's *model_params.yaml*.
-    The ``acceleration`` key holds positive values; ``deceleration`` holds
-    the matching negative values.
-    """
-
-    def __init__(self, model_params: YAMLFileSubstitution, *, decel: bool):
-        launch.Substitution.__init__(self)
-        self._model_params = model_params
-        self._decel = decel
-
-    def perform(self, context: launch.LaunchContext):
-        params = self._model_params.perform_load(context)
-        actions = params.get("actions") or {}
-        if self._decel:
-            return actions.get("deceleration", [-20.0, 0.0, -25.0])
-        return actions.get("acceleration", [20.0, 0.0, 25.0])
-
-
 class YAMLReplaceSubstitution(launch.Substitution):
 
     _substitutions: YAMLFileSubstitution

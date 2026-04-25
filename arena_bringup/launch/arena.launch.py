@@ -252,45 +252,6 @@ def generate_launch_description():
         },
     )
 
-    def create_rviz_launcher(
-        context: launch.LaunchContext,
-        *,
-        n_substitution: launch.SomeSubstitutionsType,
-    ) -> typing.Optional[typing.List[launch.LaunchDescriptionEntity]]:
-        n = launch.utilities.type_utils.perform_typed_substitution(
-            context,
-            launch.utilities.normalize_to_list_of_substitutions(n_substitution),
-            int,
-        )
-        n = typing.cast(int, n)
-        if n < 1:
-            return None
-
-        base = 'task_generator_node'
-        if n == 1:
-            ns_args = [f'/{base}']
-        else:
-            ns_args = [f'/{base}/env{i}' for i in range(n)]
-
-        return [
-            launch_ros.actions.Node(
-                package='rviz_utils',
-                executable='multi_env_rviz',
-                name='multi_env_rviz',
-                arguments=ns_args,
-                parameters=[{'use_sim_time': True}],
-                output='screen',
-                condition=launch.conditions.UnlessCondition(
-                    PythonExpression([headless.substitution, '>1'])
-                ),
-            )
-        ]
-
-    launch_rviz = launch.actions.OpaqueFunction(
-        function=create_rviz_launcher,
-        kwargs={'n_substitution': env_n.substitution},
-    )
-
     launch_simulator = launch.actions.IncludeLaunchDescription(
         launch.launch_description_sources.PythonLaunchDescriptionSource(
             os.path.join(bringup_dir, 'launch/simulator/sim/sim.launch.py')
@@ -321,13 +282,11 @@ def generate_launch_description():
         ),
         SetGlobalLogLevelAction(log_level.substitution),
         launch_task_generators,
-        launch_rviz,
         IsolatedGroupAction([launch_simulator]),
         world_generator_node,
         launch.actions.ExecuteProcess(
             cmd=['ros2', 'run', 'arena_training', 'train_agent.py',
-                 '--config', train_config.substitution,
-                 '--robot', robot.substitution],
+                 '--config', train_config.substitution],
             output='screen',
             condition=launch.conditions.IfCondition(
                 PythonExpression(['"', train_config.substitution, '" != ""'])

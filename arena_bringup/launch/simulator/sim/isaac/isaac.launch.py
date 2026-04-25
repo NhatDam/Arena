@@ -15,6 +15,11 @@ def generate_launch_description():
         default_value='debug',
         description='Logging level',
     )
+    headless = LaunchArgument(
+        name='headless',
+        default_value='False',
+        description='Run Isaac Sim in headless mode (no GUI)',
+    )
     return LaunchDescription([
         *ld,
         IncludeLaunchDescription(
@@ -27,6 +32,7 @@ def generate_launch_description():
             ),
             launch_arguments={
                 **log_level.dict,
+                **headless.dict,
             }.items(),
         )
     ])
