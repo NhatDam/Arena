@@ -472,8 +472,37 @@ class IsaacSimulator(BaseSim, NodeInterface):
         async def impl(ped: arena_people_msgs.msg.Pedestrian) -> PedestrianGoal | None:
             goal = PedestrianGoal()
             goal.name = self._NS_PEDESTRIAN(ped.name)
-            goal.pose = ped.pose
-            goal.twist = ped.twist
+
+            if hasattr(goal, 'pose'):
+                # print(f"[INFO] Setting goal pose for pedestrian {ped.name}")
+                goal.pose = ped.pose
+            elif hasattr(goal, 'position'):
+                # print(f"[INFO] Setting goal position for pedestrian {ped.name}")
+                goal.position = ped.pose.position if hasattr(ped, 'pose') else ped.position
+            else:
+                print(f"[ERROR] PedestrianGoal has neither 'pose' nor 'position' attribute; cannot set goal for pedestrian {ped.name}")
+                pass 
+
+            if hasattr(goal, 'twist'):
+                # print(f"[INFO] Setting goal twist for pedestrian {ped.name}")
+                goal.twist = ped.twist
+            elif hasattr(goal, 'velocity'):
+                # print(f"[INFO] Setting goal velocity for pedestrian {ped.name}")
+                if hasattr(ped, 'twist'):
+                    # Tính độ lớn (speed) từ vector linear x, y
+                    speed = (ped.twist.linear.x**2 + ped.twist.linear.y**2)**0.5
+                    goal.velocity = float(speed)
+                elif hasattr(ped, 'velocity'):
+                    if hasattr(ped.velocity, 'x'):
+                        speed = (ped.velocity.x**2 + ped.velocity.y**2)**0.5
+                        goal.velocity = float(speed)
+                    else:
+                        goal.velocity = float(ped.velocity)
+                else:
+                    goal.velocity = 0.0
+            else:
+                print(f"[ERROR] PedestrianGoal has neither 'twist' nor 'velocity' attribute")
+
             return goal
 
         goals = list(filter(None, await asyncio.gather(*map(impl, pedestrians.pedestrians))))

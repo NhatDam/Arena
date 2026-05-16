@@ -21,7 +21,7 @@
     <BehaviorTree ID="hunav_2_behavior_tree">
         <Sequence>
             <Sequence>
-                <SetGoal agent_id="{id}" goal_id="0" target_x="6.8" target_y="16.9" />
+                <SetGoal agent_id="{id}" goal_id="0" target_x="7.0" target_y="22.0" />
                 <GoTo    agent_id="{id}" goal_id="0" time_step="0.1" tolerance="0.1" />
             </Sequence>
         </Sequence>
