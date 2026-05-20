@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import pathlib
+import sys
 import time
 import typing
 from logging import FileHandler, Formatter, StreamHandler
@@ -14,10 +15,60 @@ from geometry_msgs.msg import PoseStamped
 from hunav_msgs.srv import StartEvaluation
 from rclpy.parameter import Parameter
 from std_srvs.srv import Empty
+from std_msgs.msg import String
+
+from rclpy.qos import QoSProfile, QoSDurabilityPolicy, QoSReliabilityPolicy
 
 from task_generator.constants import Constants
 from task_generator.tasks.modules import TM_Module
 
+
+class _BenchmarkConsoleFormatter(Formatter):
+    _RESET = "\033[0m"
+    _BOLD = "\033[1m"
+    _DIM = "\033[2m"
+    _RED = "\033[31m"
+    _GREEN = "\033[32m"
+    _YELLOW = "\033[33m"
+    _BLUE = "\033[34m"
+    _MAGENTA = "\033[35m"
+    _CYAN = "\033[36m"
+
+    def __init__(self, use_color: bool):
+        super().__init__("%(asctime)s: %(levelname)s: %(message)s")
+        self._use_color = use_color
+
+    def format(self, record: logging.LogRecord) -> str:
+        rendered = super().format(record)
+        if not self._use_color:
+            return rendered
+        return f"{self._color_for(record)}{rendered}{self._RESET}"
+
+    def _color_for(self, record: logging.LogRecord) -> str:
+        message = record.getMessage()
+
+        if record.levelno >= logging.ERROR:
+            return f"{self._BOLD}{self._RED}"
+        if record.levelno == logging.WARNING:
+            return f"{self._BOLD}{self._YELLOW}"
+        if record.levelno == logging.DEBUG:
+            return self._DIM
+
+        if "Benchmark completed" in message:
+            return f"{self._BOLD}{self._GREEN}"
+        if "Hunav evaluator stopped recording" in message:
+            return f"{self._BOLD}{self._GREEN}"
+        if "Current stage reached its final episode" in message:
+            return f"{self._BOLD}{self._MAGENTA}"
+        if message.startswith("C ["):
+            return f"{self._BOLD}{self._CYAN}"
+        if message.startswith("S ["):
+            return f"{self._BOLD}{self._BLUE}"
+        if message.startswith("E ["):
+            return f"{self._BOLD}{self._GREEN}"
+
+        return ""
+    
 
 class _Config(typing.NamedTuple):
     @classmethod
@@ -166,7 +217,31 @@ class Contest(typing.NamedTuple):
 
         @classmethod
         def parse(cls, obj: typing.Dict) -> "Contest.Contestant":
+            planner_aliases = {
+                "rosnav": "rosnav_rl",
+            }
+            obj = dict(obj)
             obj.setdefault("inter_planner", "navigate_w_replanning_time")
+            obj.setdefault("agent_name", "")
+
+            raw_local_planner = str(obj["local_planner"])
+            obj["local_planner"] = planner_aliases.get(
+                raw_local_planner,
+                raw_local_planner,
+            )
+
+            obj.setdefault(
+                "name",
+                "-".join(
+                    part
+                    for part in (
+                        obj.get("agent_name", "").strip(),
+                        raw_local_planner,
+                        obj["inter_planner"],
+                    )
+                    if part
+                ) or raw_local_planner
+            )
             return cls(**obj)
 
     name: str
@@ -188,6 +263,12 @@ class Mod_Benchmark(TM_Module):
     DIR = pathlib.Path(os.path.join(get_package_share_directory("arena_bringup"), "configs", "benchmark"))
     LOCK_FILE = "resume.lock"
     LOG_DIR = DIR / "logs"
+    DEFAULT_RESULTS_DIR = pathlib.Path(
+        os.path.join(
+            os.environ.get("WORKSPACE_DIR", os.path.expanduser("~/arena5_ws")),
+            "results",
+        )
+    )
 
 
     _config: _Config
@@ -200,6 +281,7 @@ class Mod_Benchmark(TM_Module):
     _headless: int
     _config_class: typing.Any
     _primary_node: str
+    _record_data_root: str
     _logger_object: logging.Logger = None  # type: ignore
 
     @classmethod
@@ -299,6 +381,59 @@ class Mod_Benchmark(TM_Module):
             logger.debug("[Benchmark] No parameter changes for this stage.")
         return True
 
+    def _compose_record_data_dir(
+        self,
+        contestant_config: Contest.Contestant,
+        suite_config: Suite.Stage,
+    ) -> str:
+        return os.path.join(
+            self._record_data_root,
+            contestant_config.name,
+            suite_config.name,
+            suite_config.robot,
+        )
+
+    def _default_record_data_root(self) -> str:
+        return str(self.DEFAULT_RESULTS_DIR / self._contest.name)
+
+    def _apply_contestant_parameters(
+        self,
+        contestant_config: Contest.Contestant,
+        suite_config: Suite.Stage,
+    ) -> bool:
+        logger = self._logger
+        changed = False
+
+        for label, param, value in (
+            ("Inter planner", self.node.conf.Robot.BEHAVIOR, contestant_config.inter_planner),
+            ("Local planner", self.node.conf.Robot.CONTROLLER, contestant_config.local_planner),
+            ("Agent", self.node.conf.Robot.AGENT, contestant_config.agent_name),
+            (
+                "Record data dir",
+                self.node.conf.Robot.RECORD_DATA_DIR,
+                self._compose_record_data_dir(contestant_config, suite_config),
+            ),
+        ):
+            if param.value != value:
+                param.value = value
+                logger.info(f"[Benchmark] {label} ---> {value}")
+                changed = True
+
+        if not self.node.has_parameter("robot"):
+            logger.warning("[Benchmark] Parameter 'robot' is not declared; contestant changes will not relaunch the robot stack")
+            return changed
+
+        current_robot = self.node.get_parameter("robot").value
+        try:
+            self.node.set_parameters([
+                Parameter("robot", Parameter.Type.STRING, current_robot)
+            ])
+        except Exception as e:
+            logger.error(f"[Benchmark] Could not refresh robot configuration: {e}")
+            return False
+
+        return True
+
     def __init__(self, task, **kwargs):
         super().__init__(task=task, **kwargs)
 
@@ -317,6 +452,12 @@ class Mod_Benchmark(TM_Module):
         self._contest_index = self._contest.min_index
         self._suite_index = Suite.Index(self._suite.min_index - 1)
         self._headless = 1
+        self._record_data_root = (
+            self.node.conf.Robot.RECORD_DATA_DIR.value
+            or self._default_record_data_root()
+        )
+        if not self._record_data_root.startswith("auto:/"):
+            os.makedirs(self._record_data_root, exist_ok=True)
 
         # Hunav evaluator service clients (absolute names – evaluator runs in root namespace)
         self._hunav_start_client = self.node.create_client(
@@ -336,20 +477,39 @@ class Mod_Benchmark(TM_Module):
         # suite_index starts at -1; first before_reset() will advance to 0
         # self._reincarnate()
 
-    # ---- hunav evaluator helpers ----
+        # QoS latched: node SocialNav khởi động muộn vẫn nhận được instruction cuối cùng
+        latched_qos = QoSProfile(
+            depth=1,
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL, 
+            reliability=QoSReliabilityPolicy.RELIABLE,
+        )
+        self._instr_pub = self.node.create_publisher(String, '/nav_instruction', latched_qos)
 
+    # ---- hunav evaluator helpers ----
     def _hunav_start_recording(self):
         """Call hunav_start_recording service (non-blocking fire-and-forget)."""
         logger = self._logger
 
+        # --- ĐOẠN CODE CẦN THÊM ---
+        is_ready = self._hunav_start_client.service_is_ready()
+        logger.info(f"[Benchmark] Hunav start service ready status: {is_ready}")
+        
+        if not is_ready:
+            # In ra namespace hiện tại để debug xem có khớp với namespace của evaluator không
+            current_ns = self.node.get_namespace()
+            logger.warning("[Benchmark] hunav_start_recording service NOT available!")
+            logger.warning(f"[Benchmark] Current node namespace: {current_ns}")
+            logger.warning("[Benchmark] Ensure 'hunav_evaluator_node' is running in root namespace '/'")
+            return
+        # ---------------------------
+
         if not self._hunav_start_client.service_is_ready():
-            logger.warning("[Benchmark] hunav_start_recording service not available – metrics will NOT be recorded")
+            logger.warning("[Benchmark] hunav_start_recording service not available - metrics will NOT be recorded")
             return
 
         contest_cfg = self._contest.config(self._contest_index)
         suite_cfg = self._suite.config(self._suite_index)
 
-        # Build a meaningful experiment tag:  <planner>_<stage>_ep<N>
         experiment_tag = f"{contest_cfg.name}_{suite_cfg.name}_ep{self._episode_index}"
 
         # Try to get the robot goal from the first robot manager
@@ -411,7 +571,7 @@ class Mod_Benchmark(TM_Module):
         """Async callback - logs stop recording result."""
         try:
             future.result()
-            self._logger.info("[Benchmark] Hunav evaluator stopped recording – metrics computed")
+            self._logger.info("[Benchmark] Hunav evaluator stopped recording - metrics computed")
         except Exception as e:
             self._logger.error(f"[Benchmark] hunav_stop_recording callback error: {e}")
 
@@ -466,9 +626,25 @@ class Mod_Benchmark(TM_Module):
         self._episode_index += 1
         self._hunav_start_recording()
         self._log_episode()
-        episode_limit = int(self._suite.config(self._suite_index).episodes * self._config.suite.scale_episodes)
-        if self._episode_index >= episode_limit:
+
+        msg = String()
+        msg.data = "Navigate safely to the goal and avoid pedestrians"
+
+        # Reuse the latched publisher so late subscribers still receive
+        # the latest instruction and QoS stays compatible.
+        self._instr_pub.publish(msg)
+
+        self._logger.info("Published instruction to /nav_instruction")
+
+        episode_limit = int(
+            self._suite.config(self._suite_index).episodes
+            * self._config.suite.scale_episodes
+        )
+        if self._episode_index + 1 >= episode_limit:
             self.needs_reincarnation = True
+            self._logger.info(
+                "[Benchmark] Current stage reached its final episode; next reset will advance"
+            )
 
     def _reset_task(self):
         result = self._TASK.reset()
@@ -485,9 +661,14 @@ class Mod_Benchmark(TM_Module):
             handler = FileHandler(self.LOG_DIR / f"{self._runid}.log")
             handler.setFormatter(Formatter("%(asctime)s: %(levelname)s: %(message)s"))
             console_handler = StreamHandler()
-            console_handler.setFormatter(Formatter("%(asctime)s: %(levelname)s: %(message)s"))
+            force_color = os.environ.get("FORCE_COLOR") == "1"
+            use_color = os.environ.get("NO_COLOR") is None and (
+                force_color or sys.stderr.isatty()
+            )
+            console_handler.setFormatter(_BenchmarkConsoleFormatter(use_color=use_color))
             logger = logging.getLogger("benchmark")
             logger.setLevel(logging.DEBUG)
+            logger.propagate = False
             logger.addHandler(handler)
             logger.addHandler(console_handler)
             self._logger_object = logger
@@ -550,10 +731,17 @@ class Mod_Benchmark(TM_Module):
         logger = self._logger
         logger.debug("Starting reincarnation process")
         suite_config = self._suite.config(self._suite_index)
-        logger.info(f"Transitioning to stage: {suite_config.name} (tm_robots={suite_config.tm_robots.value}, tm_obstacles={suite_config.tm_obstacles.value})")
+        contestant_config = self._contest.config(self._contest_index)
+        logger.info(
+            "Transitioning to contestant/stage: "
+            f"{contestant_config.name} / {suite_config.name} "
+            f"(tm_robots={suite_config.tm_robots.value}, tm_obstacles={suite_config.tm_obstacles.value})"
+        )
         success = False
         selected_node = self._primary_node
-        if self._set_node_parameters(suite_config):
+        contestant_ok = self._apply_contestant_parameters(contestant_config, suite_config)
+        stage_ok = self._set_node_parameters(suite_config)
+        if contestant_ok and stage_ok:
             logger.info(f"Stage setup complete for {suite_config.name} on {selected_node}")
             success = True
         else:

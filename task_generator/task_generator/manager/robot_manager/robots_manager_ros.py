@@ -226,7 +226,7 @@ class RobotsManagerROS(NodeInterface, RobotsManager):
         self._diff.to_remove.clear()
 
         for robot_name, config in self._diff.to_update.items():
-            futures.append(self.managers[robot_name].update())
+            futures.append(self.managers[robot_name].update(config))
             # TODO
         self._diff.to_update.clear()
 

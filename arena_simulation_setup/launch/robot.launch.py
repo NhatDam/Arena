@@ -1,3 +1,5 @@
+import os
+
 import launch_ros
 from arena_bringup.future import PythonExpression
 from arena_bringup.substitutions import LaunchArgument
@@ -24,10 +26,13 @@ def generate_launch_description():
     namespace = LaunchArgument("namespace")
     robot = LaunchArgument("robot")
     frame = LaunchArgument("frame")
+    agent_name = LaunchArgument('agent_name', default_value='')
 
     global_planner = LaunchArgument("global_planner")
     local_planner = LaunchArgument("local_planner")
     inter_planner = LaunchArgument("inter_planner", default_value="navigate_to_pose")
+    map_file = LaunchArgument("map_file", default_value="")
+    scenario_file = LaunchArgument("scenario_file", default_value="")
 
     record_data_dir = LaunchArgument('record_data_dir', default_value='')
     amcl = LaunchArgument('amcl', default_value='false')
@@ -66,31 +71,71 @@ def generate_launch_description():
         }.items(),
     )
 
-    # launch robot control
-    state_pub_launch = launch.actions.IncludeLaunchDescription(
-        launch.launch_description_sources.PythonLaunchDescriptionSource(
-            launch.substitutions.PathJoinSubstitution(
-                [
-                    ss_path,
-                    "launch",
-                    "state_publisher.launch.py",
-                ]
-            )),
-        launch_arguments={
-            **use_sim_time.dict,
-            **frame.dict,
-            **namespace.dict,
-            **robot.dict,
-        }.items(),
+    workspace_dir = os.environ.get('WORKSPACE_DIR', os.path.expanduser('~/arena5_ws'))
+
+    # ---- SocialNav / UrbanNav paths ----
+    social_nav_root = next(
+        (
+            candidate
+            for candidate in (
+                os.path.join(workspace_dir, 'src', 'arena-social-nav'),
+                os.path.join(workspace_dir, 'src', 'social-nav'),
+            )
+            if os.path.exists(candidate)
+        ),
+        os.path.join(workspace_dir, 'src', 'arena-social-nav'),
     )
+    socialnav_bridge_script = os.path.join(
+        social_nav_root,
+        'ros2_nodes',
+        'socialnav',
+        'human_states_bridge.py',
+    )
+    socialnav_controller_script = os.path.join(
+        social_nav_root,
+        'ros2_nodes',
+        'socialnav',
+        'socialnav_dwb_node.py',
+    )
+    urbannav_controller_script = os.path.join(
+        social_nav_root,
+        'ros2_nodes',
+        'urbannav',
+        'urbannav_dwb_node.py',
+    )
+    socialnav_config_path = os.path.join(social_nav_root, 'configs', 'socialnav_film.yaml')
+    urbannav_config_path = os.path.join(social_nav_root, 'configs', 'urbannav_film.yaml')
+
+    socialnav_ckpt_path = os.path.join(social_nav_root, 'ckpt', 'SocialNav_margin.pth')
+    urbannav_ckpt_path = os.path.join(social_nav_root, 'ckpt', 'UrbanNav_FiLM.pth')
+
+    # ---- CityWalker paths ----
+    # Thêm block này khi tích hợp arena-citywalker
+    citywalker_root = os.path.join(workspace_dir, 'src', 'arena-citywalker')
+    citywalker_controller_script = os.path.join(
+        citywalker_root,
+        'ros2_nodes',
+        'citywalker',
+        'citywalker_node.py',
+    )
+    citywalker_config_path = os.path.join(citywalker_root, 'configs', 'default.yaml')
 
     data_recorder = launch_ros.actions.Node(
         package='arena_evaluation',
         executable='record',
+        namespace=namespace.substitution, 
         name=PythonExpression(['"data_recorder" + "', namespace.substitution, '".replace("/","_")']),
         arguments=[
             ['--dir', ' ', record_data_dir.substitution],
         ],
+        parameters=[{
+            'model': robot.substitution,
+            'local_planner': local_planner.substitution,
+            'inter_planner': inter_planner.substitution,
+            'agent_name': agent_name.substitution,
+            'map_file': map_file.substitution,
+            'scenario_file': scenario_file.substitution,
+        }],
         condition=launch.conditions.IfCondition(PythonExpression(['bool("', record_data_dir.substitution, '")'])),
     )
 
@@ -104,35 +149,190 @@ def generate_launch_description():
             ])
         ),
         launch_arguments={
-            'agent_name': launch.substitutions.LaunchConfiguration('agent_name'),
+            'agent_name': agent_name.substitution,
             'namespace': namespace.substitution,
             'agents_dir': agents_dir.substitution,
         }.items(),
         condition=IfCondition(
-            PythonExpression(["'", local_planner.substitution, "' == 'rosnav_rl' and '", train_mode.substitution, "' == 'false'"])
+            PythonExpression([
+                "('", local_planner.substitution, "' == 'rosnav_rl' or '",
+                local_planner.substitution, "' == 'rosnav') and '",
+                train_mode.substitution, "' == 'false'"
+            ])
         ),
+    )
+
+    # ---- SocialNav bridge (human detection) ----
+    socialnav_bridge = launch.actions.ExecuteProcess(
+        cmd=[
+            'python3',
+            socialnav_bridge_script,
+            '--ros-args',
+            '-r',
+            PythonExpression([
+                '"__node:=human_states_bridge_" + "',
+                namespace.substitution,
+                '".strip("/").replace("/", "_")'
+            ]),
+        ],
+        output='screen',
+        condition=IfCondition(
+            PythonExpression([
+                '"SocialNav" in "', record_data_dir.substitution, '" and "',
+                local_planner.substitution, '" == "dwb"'
+            ])
+        ),
+    )
+
+    # ---- SocialNav controller ----
+    socialnav_controller = launch.actions.ExecuteProcess(
+        cmd=[
+            'python3', socialnav_controller_script,
+            '--ros-args',
+            '-r', PythonExpression(['"__node:=socialnav_dwb_controller_" + "', namespace.substitution, '".strip("/").replace("/", "_")']),
+            '-p', f'model_config_path:={socialnav_config_path}',
+            '-p', f'model_checkpoint_path:={socialnav_ckpt_path}', # SỬA DÒNG NÀY
+            '-p', 'history_length:=8',
+            '-p', 'control_frequency:=10.0',
+            '-p', 'look_ahead_distance:=0.5',
+            '-p', 'max_linear_velocity:=1.0',
+            '-p', 'max_angular_velocity:=1.5',
+            '-p', 'arrival_threshold:=0.25',
+            '-p', 'enable_human_tracking:=true',
+            '-p', 'max_humans:=10',
+        ],
+        output='screen',
+        condition=IfCondition(
+            PythonExpression([
+                '"SocialNav" in "', record_data_dir.substitution, '" and "',
+                local_planner.substitution, '" == "dwb"'
+            ])
+        ),
+    )
+
+    # ---- UrbanNav controller ----
+    urbannav_controller = launch.actions.ExecuteProcess(
+        cmd=[
+            'python3',
+            urbannav_controller_script,
+            '--ros-args',
+            '-r',
+            PythonExpression([
+                '"__node:=urbannav_dwb_controller_" + "',
+                namespace.substitution,
+                '".strip("/").replace("/", "_")'
+            ]),
+            '-p',
+            f'model_config_path:={urbannav_config_path}',
+            '-p',
+            PythonExpression([
+                '"model_checkpoint_path:=', social_nav_root, '/ckpt/',
+                agent_name.substitution, '.pth"'
+            ]),
+            '-p', 'history_length:=8',
+            '-p', 'control_frequency:=10.0',
+            '-p', 'look_ahead_distance:=0.5',
+            '-p', 'max_linear_velocity:=1.0',
+            '-p', 'max_angular_velocity:=1.5',
+            '-p', 'arrival_threshold:=0.7',
+            '-p',
+            PythonExpression(['"robot_namespace:=', namespace.substitution, '"']),
+            '-p', 'instruction_topic:=/nav_instruction',
+        ],
+        output='screen',
+        condition=IfCondition(
+            PythonExpression([
+                '"', agent_name.substitution, '".startswith("UrbanNav") and "',
+                local_planner.substitution, '" == "dwb" and "',
+                train_mode.substitution, '" == "false"'
+            ])
+        ),
+    )
+
+    # ---- CityWalker controller ----
+    # Thêm block này khi tích hợp arena-citywalker.
+    # Điều kiện: agent_name phải bắt đầu bằng "CityWalker"
+    citywalker_controller = launch.actions.ExecuteProcess(
+        cmd=[
+            'python3',
+            citywalker_controller_script,
+            '--ros-args',
+            '-r',
+            PythonExpression([
+                '"__node:=citywalker_controller_" + "',
+                namespace.substitution,
+                '".strip("/").replace("/", "_")'
+            ]),
+            '-p', f'model_config_path:={citywalker_config_path}',
+            '-p',
+            PythonExpression([
+                '"model_checkpoint_path:=', citywalker_root, '/ckpt/',
+                agent_name.substitution, '.pth"'
+            ]),
+            '-p', 'history_length:=8',
+            '-p', 'control_frequency:=10.0',
+            '-p', 'look_ahead_distance:=0.5',
+            '-p', 'max_linear_velocity:=1.0',
+            '-p', 'max_angular_velocity:=1.5',
+            '-p', 'arrival_threshold:=0.7',
+            '-p',
+            PythonExpression(['"robot_namespace:=', namespace.substitution, '"']),
+            '-p', 'instruction_topic:=/nav_instruction',
+        ],
+        output='screen',
+        condition=IfCondition(
+            PythonExpression([
+                '"', agent_name.substitution, '".startswith("CityWalker") and "',
+                local_planner.substitution, '" == "dwb" and "',
+                train_mode.substitution, '" == "false"'
+            ])
+        ),
+    )
+
+    # ---- Thêm block cấu hình và khởi chạy Hunav Evaluator ----
+    metrics_config_path = os.path.join(workspace_dir, 'results', 'metrics.yaml')
+
+    hunav_evaluator_node = launch_ros.actions.Node(
+        package='hunav_evaluator',
+        executable='hunav_evaluator_node',
+        name='hunav_evaluator_node',
+        # Ép node này chạy ở root namespace để khớp với service mapping của benchmark.py
+        namespace='/', 
+        parameters=[metrics_config_path],
+        output='screen',
+        # Tùy chọn: Bạn có thể thêm condition nếu chỉ muốn bật evaluator khi đang lưu data
+        # condition=launch.conditions.IfCondition(PythonExpression(['bool("', record_data_dir.substitution, '")']))
+    )
+    # ---------------------------------------------------------
+
+    lidar_relay = launch_ros.actions.Node(
+        package='topic_tools',
+        executable='relay',
+        name='lidar_to_scan_relay',
+        arguments=['lidar', 'scan'], 
+        output='screen',
     )
 
     ld = launch.LaunchDescription([
         *ld_items,
         launch.actions.DeclareLaunchArgument(
-            name='agent_name',
-            default_value='',
-            description='DRL agent name to be deployed'
-        ),
-        launch.actions.DeclareLaunchArgument(
             name='complexity',
             default_value='1'
         ),
         PushRosNamespace(namespace=namespace.substitution),
-        # robot_localization_node,
+        lidar_relay,
         nav2_launch,
-        # state_pub_launch,
         rosnav_rl_action_server,
+        socialnav_bridge,
+        socialnav_controller,
+        urbannav_controller,
+        citywalker_controller,   
         data_recorder,
+        hunav_evaluator_node, # <--- Đưa node vào danh sách LaunchDescription
     ])
     return ld
 
 
 if __name__ == '__main__':
+    print("[INFO] Robot is launching ... ")
     generate_launch_description()

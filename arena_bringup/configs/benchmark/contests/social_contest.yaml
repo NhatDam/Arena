@@ -1,0 +1,32 @@
+contestants:
+  # ---- Baseline: DWB thuần ----
+  # - name: DWB-Baseline
+  #   local_planner: dwb
+  #   inter_planner: navigate_w_replanning_time
+  #   agent_name: ""
+
+  # ---- Social Navigation (SocialNav FiLM) ----
+  # agent_name PHẢI bắt đầu bằng "SocialNav" để kích hoạt socialnav_controller
+  - name: SocialNav-FiLM
+    local_planner: dwb
+    inter_planner: navigate_w_replanning_time
+    agent_name: SocialNav_margin
+
+  # ---- Urban Navigation (UrbanNav FiLM) ----
+  # agent_name PHẢI bắt đầu bằng "UrbanNav" để kích hoạt urbannav_controller
+  # - name: UrbanNav-FiLM
+  #   local_planner: dwb
+  #   inter_planner: navigate_w_replanning_time
+  #   agent_name: UrbanNav_FiLM
+
+  # ---- Ví dụ thêm CityWalker (cần thêm vào robot.launch.py trước) ----
+  # - name: CityWalker-v1
+  #   local_planner: dwb
+  #   inter_planner: navigate_w_replanning_time
+  #   agent_name: CityWalker_v1
+
+  # ---- Ví dụ RosNav RL ----
+  # - name: RosNav-RL
+  #   local_planner: rosnav_rl
+  #   inter_planner: navigate_w_replanning_time
+  #   agent_name: rosnav_agent_v1

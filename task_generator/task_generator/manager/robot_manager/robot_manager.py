@@ -4,7 +4,9 @@ import typing
 
 import action_msgs.msg
 import ament_index_python
+import arena_evaluation_msgs.srv as arena_evaluation_srvs
 import arena_bringup.extensions.NodeLogLevelExtension as NodeLogLevelExtension
+import attrs
 import geometry_msgs.msg
 import launch.launch_description_sources
 import launch_ros
@@ -116,11 +118,18 @@ class RobotManager(NodeInterface):
         self._goal_timer = None
 
         self._publish_goal_task: typing.Optional[asyncio.Task] = None
+        self._launch_tasks: list[asyncio.Task] = []
+
+    async def _do_launch(self, launch_description: launch.LaunchDescription):
+        """Launch and retain task handles so robot sidecars can be cancelled on destroy."""
+        task = await self.node._launch_manager.launch_description(launch_description)
+        self._launch_tasks.append(task)
+        return task
 
     async def _odom_base_transform(self):
         """Launch a static transform publisher for odometry to base frame.
         """
-        await self.node.do_launch(
+        await self._do_launch(
             launch.LaunchDescription([
                 launch_ros.actions.Node(
                     package="tf2_ros",
@@ -492,6 +501,8 @@ class RobotManager(NodeInterface):
                 # 'complexity': self.node.declare_parameter('complexity', 1).value,
                 'train_mode': str(self.node._train_mode).lower(),
                 'agent_name': self._robot.agent,
+                'map_file': self.node.conf.Arena.WORLD.value,
+                'scenario_file': self.node.get_parameter("task.scenario.file").value if self.node.has_parameter("task.scenario.file") else '',
                 'use_sim_time': 'True',
                 'amcl': 'true' if self.node.conf.Arena.SIM.value in (Constants.SimSimulator.GAZEBO,) else 'false',
             }
@@ -512,7 +523,7 @@ class RobotManager(NodeInterface):
                     launch_arguments=launch_arguments.items(),
                 )
             )
-            await self.node.do_launch(launch_description)
+            await self._do_launch(launch_description)
 
             bt_node_path = str(self.namespace('bt_navigator'))
             self._logger.info(f'waiting for {bt_node_path}')
@@ -550,10 +561,94 @@ class RobotManager(NodeInterface):
         self._is_goal_reached = \
             last_goal.status == action_msgs.msg.GoalStatus.STATUS_SUCCEEDED
 
-    async def update(self):
-        """Live - update some kwargs of robot
-        """
-        # TODO implement record data dir
+    def _data_recorder_parameters(self) -> list[dict[str, typing.Any]]:
+        scenario_file = ""
+        if self.node.has_parameter("task.scenario.file"):
+            scenario_file = self.node.get_parameter("task.scenario.file").value
+
+        return [{
+            "model": self.model_name,
+            "local_planner": self._robot.local_planner,
+            "inter_planner": self._robot.inter_planner,
+            "agent_name": self._robot.agent,
+            "map_file": self.node.conf.Arena.WORLD.value,
+            "scenario_file": scenario_file,
+        }]
+
+    async def _launch_data_recorder(self, record_data_dir: str):
+        self._logger.info(
+            f"Launching data recorder for {self.name} in {record_data_dir}"
+        )
+        await self._do_launch(
+            launch.LaunchDescription([
+                launch_ros.actions.Node(
+                    package='arena_evaluation',
+                    executable='record',
+                    namespace=str(self.namespace),
+                    name='data_recorder',
+                    arguments=['--dir', record_data_dir],
+                    parameters=self._data_recorder_parameters(),
+                )
+            ])
+        )
+
+    async def _change_data_recorder_directory(self, record_data_dir: str):
+        service_name = str(self.namespace("change_directory"))
+        client = self.node.create_client(
+            arena_evaluation_srvs.ChangeDirectory,
+            service_name,
+        )
+
+        for _ in range(50):
+            if client.service_is_ready():
+                break
+            await asyncio.sleep(0.1)
+
+        if not client.service_is_ready():
+            self._logger.warning(
+                f"Data recorder service not available at {service_name}; directory update skipped"
+            )
+            return
+
+        request = arena_evaluation_srvs.ChangeDirectory.Request()
+        request.data = record_data_dir
+
+        future = client.call_async(request)
+        await future
+
+        response = future.result()
+        if response is None or not response.result:
+            self._logger.warning(
+                f"Data recorder at {service_name} rejected directory change to {record_data_dir}"
+            )
+            return
+
+        self._logger.info(
+            f"Data recorder for {self.name} switched to {record_data_dir}"
+        )
+
+    async def update(self, robot: typing.Optional[Robot] = None):
+        """Live-update robot sidecars that can change without a full relaunch."""
+        if robot is None:
+            return
+
+        old_record_data_dir = self._robot.record_data_dir
+        new_record_data_dir = robot.record_data_dir
+
+        self._robot = attrs.evolve(
+            self._robot,
+            record_data_dir=new_record_data_dir,
+            extra=robot.extra,
+        )
+
+        if old_record_data_dir == new_record_data_dir or not new_record_data_dir:
+            return
+
+        if not old_record_data_dir:
+            await self._launch_data_recorder(new_record_data_dir)
+            return
+
+        await self._change_data_recorder_directory(new_record_data_dir)
 
     async def destroy(self):
         """Destroy robot and remove from simulation and navigation stack.
@@ -561,5 +656,10 @@ class RobotManager(NodeInterface):
         if self._goal_timer is not None:
             self._goal_timer.cancel()
             self._goal_timer.destroy()
+        for task in self._launch_tasks:
+            if not task.done():
+                task.cancel()
+        if self._launch_tasks:
+            await asyncio.gather(*self._launch_tasks, return_exceptions=True)
+            self._launch_tasks.clear()
         await self._environment_manager.remove_robot((self.robot,))
-        # TODO kill node in navigation stack

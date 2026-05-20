@@ -1,5 +1,5 @@
 contest:
-  config: hospital_1_nav2.yaml
+  config: social_contest.yaml
 general:
   simulator: isaac
 suite:
