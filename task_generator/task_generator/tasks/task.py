@@ -289,11 +289,16 @@ class Task(_TaskRegistry, NodeInterface, Props_):
 
             # 2. Wait briefly for Isaac Sim physics + TF to settle after teleport
             await asyncio.sleep(0.5)
-            # 3. Cycle local costmaps (purges stale observation buffers fully)
-            await self.cycle_all_local_costmaps()
-
-            # 4. Clear any remaining stale costmap data
-            await self.clear_all_costmaps()
+            # 3. Purge stale observations left behind by teleportation before
+            # goals are published again for the new episode.
+            try:
+                await self.cycle_all_local_costmaps()
+                await asyncio.sleep(0.2)
+                await self.clear_all_costmaps()
+            except Exception as e:
+                self._logger.warn(
+                    f"Costmap reset failed after teleport (continuing): {e}"
+                )
 
             for module in self.__modules:
                 module.after_reset()

@@ -28,6 +28,9 @@ from task_generator.constants import Constants
 from task_generator.manager.environment_manager import EnvironmentManager
 from task_generator.shared import Orientation, Pose, Position, Robot
 
+from rclpy.action import ActionClient
+from nav2_msgs.action import NavigateToPose
+
 import rclpy.node
 
 
@@ -161,6 +164,16 @@ class RobotManager(NodeInterface):
             10,
         )
 
+        # --- KHỞI TẠO ACTION CLIENT CHO NAV2 ---
+        # action_topic = f"/{str(self.namespace).strip('/')}/navigate_to_pose"
+        # self._nav_action_client = ActionClient(
+        #     self.node,
+        #     NavigateToPose,
+        #     action_topic
+        # )
+        # self.node.get_logger().warn(f"🔗 [ROBOT MANAGER] Action Client ready at: {action_topic}")
+        # ---------------------------------------
+
         self.node.create_subscription(
             nav_msgs.Odometry,
             self.namespace("odom"),
@@ -256,8 +269,8 @@ class RobotManager(NodeInterface):
         self.robot.pose = pose
         await self._environment_manager.move_robot((self.robot,))
         await asyncio.sleep(0.5)     
-        await self._clear_local_costmap(-1)
-        await asyncio.sleep(0.2)    
+        # await self._clear_local_costmap(-1)
+        # await asyncio.sleep(0.2)    
 
     async def _clear_local_costmap(self, reset_distance: float = -1) -> bool:
         """Clear the local costmap around the robot.
@@ -449,33 +462,62 @@ class RobotManager(NodeInterface):
         return self._pose, self._goal_pos
 
     async def _publish_goal_loop(self):
-        """Publish the goal to the robot.
-        """
-        # only way to circumvent amcl absolutely trolling us is to create this loop
+        """Publish goal via Topic AND trigger Nav2 Action via OS Subprocess."""
+        
+        self.node.get_logger().warn("🟢 [DEBUG] Waiting 1.5s for Isaac Sim TF & Costmap...")
+        await asyncio.sleep(1.5) 
+        
+        if self._is_goal_reached:
+            return
 
-        with self.node.sim_time_rate(60.0, 60.0) as (done, rate):
-            while not done.is_set():
-                await rate.get()
+        goal = self._goal_pos
+        self.node.get_logger().warn(f"🚀 [ROBOT MANAGER] Target Goal: x={goal.position.x}, y={goal.position.y}")
 
-                if self._is_goal_reached:
-                    break
+        if self._goal_timer is not None:
+            self._goal_timer.cancel()
+            self._goal_timer.destroy()
 
-                goal = self._goal_pos
-                self._logger.info(f"Publishing goal: x={goal.position.x}, y={goal.position.y}, orientation={goal.orientation.to_yaw()}")
+        # Publish the benchmark goal in the global map frame so Nav2, metrics,
+        # and downstream benchmark tooling agree on the same target.
+        target_pose = geometry_msgs.msg.PoseStamped()
+        target_pose.header.frame_id = "map"
+        target_pose.header.stamp.sec = 0
+        target_pose.header.stamp.nanosec = 0
+        target_pose.pose = goal.to_msg()
+        self._goal_pub.publish(target_pose)
 
-                self._goal_pos = goal
+        # Send the same map-framed goal to Nav2 via CLI to avoid the previous
+        # action-client deadlock in this benchmark harness.
+        action_topic = f"/{str(self.namespace).strip('/')}/navigate_to_pose"
+        goal_x = float(goal.position.x)
+        goal_y = float(goal.position.y)
+        goal_orientation = target_pose.pose.orientation
 
-                if self._goal_timer is not None:
-                    self._goal_timer.cancel()
-                    self._goal_timer.destroy()
+        goal_yaml = (
+            "{pose: {header: {frame_id: 'map', stamp: {sec: 0, nanosec: 0}}, "
+            "pose: {position: {x: %.6f, y: %.6f, z: 0.0}, "
+            "orientation: {x: %.6f, y: %.6f, z: %.6f, w: %.6f}}}}"
+            % (
+                goal_x,
+                goal_y,
+                goal_orientation.x,
+                goal_orientation.y,
+                goal_orientation.z,
+                goal_orientation.w,
+            )
+        )
+        cmd = (
+            f'ros2 action send_goal {action_topic} nav2_msgs/action/NavigateToPose '
+            f'"{goal_yaml}" > /dev/null 2>&1 &'
+        )
 
-                goal_msg = geometry_msgs.msg.PoseStamped()
-                goal_msg.header.frame_id = "map"
-                goal_msg.header.stamp = self.node.sim_time.to_msg()
-                goal_msg.pose = goal.to_msg()
-                self._goal_pub.publish(goal_msg)
-                self._goal_active = True
-                self._goal_start_time = self.node.sim_time
+        # Thực thi lệnh ngầm trong background
+        os.system(cmd)
+        self.node.get_logger().warn("✅ [ROBOT MANAGER] Action Goal SENT via OS Background Process!")
+
+        self._goal_active = True
+        self._goal_start_time = self.node.get_clock().now()
+        
 
     async def _launch_robot(self, node_paths: set[str]):
         """Launch the robot external nodes.

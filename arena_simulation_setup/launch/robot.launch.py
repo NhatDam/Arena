@@ -67,6 +67,7 @@ def generate_launch_description():
             **inter_planner.dict,
             **frame.dict,
             **amcl.dict,
+            **agent_name.dict,
             **train_mode.dict,
         }.items(),
     )
@@ -289,6 +290,30 @@ def generate_launch_description():
         ),
     )
 
+    # ---- Pure DWB Baseline Controller (khi không dùng AI) ----
+    # pure_dwb_controller = launch_ros.actions.Node(
+    #     package='nav2_controller',
+    #     executable='controller_server',
+    #     name='controller_server',
+    #     namespace=namespace.substitution,
+    #     output='screen',
+    #     parameters=[{
+    #         'use_sim_time': True,
+    #         'controller_server.ros__parameters': {
+    #             'controller_plugins': ['FollowPath'],
+    #             'FollowPath': {
+    #                 'plugin': 'dwb_core::DWBLocalPlanner',
+    #                 'max_vel_x': 1.0,
+    #                 'min_vel_x': -0.5,
+    #                 'max_vel_theta': 2.0,
+    #             }
+    #         }
+    #     }],
+    #     condition=IfCondition(
+    #         PythonExpression(['"', agent_name.substitution, '" == ""'])
+    #     ),
+    # )
+
     # ---- Thêm block cấu hình và khởi chạy Hunav Evaluator ----
     metrics_config_path = os.path.join(workspace_dir, 'results', 'metrics.yaml')
 
@@ -327,8 +352,9 @@ def generate_launch_description():
         socialnav_controller,
         urbannav_controller,
         citywalker_controller,   
+        # pure_dwb_controller,
         data_recorder,
-        hunav_evaluator_node, # <--- Đưa node vào danh sách LaunchDescription
+        hunav_evaluator_node, 
     ])
     return ld
 

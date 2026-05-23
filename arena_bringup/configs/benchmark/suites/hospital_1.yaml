@@ -8,7 +8,7 @@ stages:
   name: hospital_1_corridor_headon_turtlebot
   tm_obstacles: scenario
   tm_robots: scenario
-  timeout: 180
+  timeout: 10
 - config:
     SCENARIO:
       file: crossing_intersection
@@ -18,7 +18,7 @@ stages:
   name: hospital_1_crossing_intersection_turtlebot
   tm_obstacles: scenario
   tm_robots: scenario
-  timeout: 180
+  timeout: 60
 - config:
     SCENARIO:
       file: doorway_bottleneck
@@ -28,7 +28,7 @@ stages:
   name: hospital_1_doorway_bottleneck_turtlebot
   tm_obstacles: scenario
   tm_robots: scenario
-  timeout: 180
+  timeout: 60
 - config:
     SCENARIO:
       file: group_blocking
@@ -38,7 +38,7 @@ stages:
   name: hospital_1_group_blocking_turtlebot
   tm_obstacles: scenario
   tm_robots: scenario
-  timeout: 180
+  timeout: 60
 - config:
     SCENARIO:
       file: overtaking
@@ -48,4 +48,4 @@ stages:
   name: hospital_1_overtaking_turtlebot
   tm_obstacles: scenario
   tm_robots: scenario
-  timeout: 180
+  timeout: 60

@@ -32,6 +32,7 @@ def generate_launch_description():
     inter_planner = LaunchArgument('inter_planner')
 
     amcl = LaunchArgument('amcl')
+    agent_name = LaunchArgument('agent_name', default_value='')
     train_mode = LaunchArgument('train_mode', default_value='false')
 
     substitutions = YAMLMergeSubstitution(
@@ -188,6 +189,14 @@ def generate_launch_description():
         ]),
     )
 
+    controller_cmd_topic = PythonExpression([
+        '"cmd_vel_nav_raw" if ("', local_planner.substitution, '" == "dwb" and "',
+        train_mode.substitution, '" == "false" and (',
+        '"', agent_name.substitution, '".startswith("SocialNav") or ',
+        '"', agent_name.substitution, '".startswith("UrbanNav") or ',
+        '"', agent_name.substitution, '".startswith("CityWalker"))) else "cmd_vel_nav"'
+    ])
+
     remappings = [
         ('map_server', '/map_server'),
         ('/tf', '/tf'),
@@ -202,13 +211,6 @@ def generate_launch_description():
             executable='relay',
             name='goal_pose_relay',
             arguments=['/goal_pose', 'goal_pose'],
-        ),
-        Node(
-            package='pose_to_tf',
-            executable='pose_to_tf',
-            name='pose_to_tf',
-            parameters=[{'odom_frame': 'odom', 'pose_topic': 'pose'}],
-            output='screen'
         ),
         # Node(
         #     package='tf2_ros',
@@ -329,6 +331,7 @@ def generate_launch_description():
                 'autostart': 'True',
                 'params_file': substituted_parameters,
                 'use_composition': 'False',
+                'controller_cmd_topic': controller_cmd_topic,
             }.items()
         ),
     ])
