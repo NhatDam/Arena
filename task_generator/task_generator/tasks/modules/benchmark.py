@@ -23,6 +23,19 @@ from task_generator.constants import Constants
 from task_generator.tasks.modules import TM_Module
 
 
+def _resolve_benchmark_dir() -> pathlib.Path:
+    workspace_dir = pathlib.Path(
+        os.environ.get("WORKSPACE_DIR", os.path.expanduser("~/arena5_ws"))
+    ).resolve()
+    source_dir = workspace_dir / "src" / "Arena" / "arena_bringup" / "configs" / "benchmark"
+    if source_dir.exists():
+        return source_dir
+
+    return pathlib.Path(
+        os.path.join(get_package_share_directory("arena_bringup"), "configs", "benchmark")
+    )
+
+
 class _BenchmarkConsoleFormatter(Formatter):
     _RESET = "\033[0m"
     _BOLD = "\033[1m"
@@ -260,7 +273,7 @@ class Contest(typing.NamedTuple):
 
 
 class Mod_Benchmark(TM_Module):
-    DIR = pathlib.Path(os.path.join(get_package_share_directory("arena_bringup"), "configs", "benchmark"))
+    DIR = _resolve_benchmark_dir()
     LOCK_FILE = "resume.lock"
     LOG_DIR = DIR / "logs"
     DEFAULT_RESULTS_DIR = pathlib.Path(
@@ -510,7 +523,7 @@ class Mod_Benchmark(TM_Module):
         contest_cfg = self._contest.config(self._contest_index)
         suite_cfg = self._suite.config(self._suite_index)
 
-        experiment_tag = f"{contest_cfg.name}_{suite_cfg.name}_ep{self._episode_index}"
+        experiment_tag = f"{contest_cfg.name}__{suite_cfg.name}__ep{self._episode_index}"
 
         # Try to get the robot goal from the first robot manager
         robot_goal = PoseStamped()
@@ -539,7 +552,7 @@ class Mod_Benchmark(TM_Module):
         )
 
     def _on_hunav_start_result(self, future, experiment_tag):
-        """Async callback – logs the evaluator's response."""
+        """Async callback - logs the evaluator's response."""
         try:
             result = future.result()
             if result and result.success:

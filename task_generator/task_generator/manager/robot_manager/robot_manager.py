@@ -17,6 +17,7 @@ import rclpy.client
 import rclpy.logging
 import rclpy.publisher
 import rclpy.timer
+from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
 from arena_rclpy_mixins.shared import Namespace
 from arena_robots.Robot import RobotView
 from nav2_msgs.srv import ClearCostmapAroundRobot, ClearEntireCostmap
@@ -157,11 +158,16 @@ class RobotManager(NodeInterface):
         self._robot = (await self._environment_manager.spawn_robot((self._robot,)))[0]
 
         _gen_goal_topic = self.namespace("goal_pose")
+        goal_qos = QoSProfile(
+            depth=1,
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+            reliability=QoSReliabilityPolicy.RELIABLE,
+        )
 
         self._goal_pub = self.node.create_publisher(
             geometry_msgs.msg.PoseStamped,
             _gen_goal_topic,
-            10,
+            goal_qos,
         )
 
         # --- KHỞI TẠO ACTION CLIENT CHO NAV2 ---
@@ -554,13 +560,28 @@ class RobotManager(NodeInterface):
                     'record_data_dir': self._robot.record_data_dir,
                 })
 
+            workspace_dir = os.environ.get("WORKSPACE_DIR", os.path.expanduser("~/arena5_ws"))
+            source_robot_launch = os.path.join(
+                workspace_dir,
+                "src",
+                "Arena",
+                "arena_simulation_setup",
+                "launch",
+                "robot.launch.py",
+            )
+            robot_launch_path = (
+                source_robot_launch
+                if os.path.exists(source_robot_launch)
+                else os.path.join(
+                    ament_index_python.packages.get_package_share_directory('arena_simulation_setup'),
+                    'launch/robot.launch.py'
+                )
+            )
+
             launch_description.add_action(
                 launch.actions.IncludeLaunchDescription(
                     launch.launch_description_sources.PythonLaunchDescriptionSource(
-                        os.path.join(
-                            ament_index_python.packages.get_package_share_directory('arena_simulation_setup'),
-                            'launch/robot.launch.py'
-                        )
+                        robot_launch_path
                     ),
                     launch_arguments=launch_arguments.items(),
                 )

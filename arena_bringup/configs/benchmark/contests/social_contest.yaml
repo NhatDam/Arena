@@ -1,31 +1,27 @@
 contestants:
+  # ---- SocialNav ----
+  # agent_name phải trùng basename checkpoint trong src/arena-social-nav/ckpt
+  - name: SocialNav-FiLM
+    local_planner: dwb
+    inter_planner: navigate_w_replanning_time
+    agent_name: SocialNav_margin
+
   # ---- Baseline DWB thuần (không AI) ----
   - name: DWB-Baseline
     local_planner: dwb
     inter_planner: navigate_w_replanning_time
     agent_name: ""          
 
-  # ---- SocialNav ----
-  - name: SocialNav-FiLM
+  # ---- Urban Navigation (UrbanNav FiLM) ----
+  # agent_name phải bắt đầu bằng "UrbanNav" và trùng basename checkpoint
+  - name: UrbanNav-FiLM
     local_planner: dwb
     inter_planner: navigate_w_replanning_time
-    agent_name: SocialNav_margin
+    agent_name: UrbanNav_FiLM
 
-  # ---- Urban Navigation (UrbanNav FiLM) ----
-  # agent_name PHẢI bắt đầu bằng "UrbanNav" để kích hoạt urbannav_controller
-  # - name: UrbanNav-FiLM
-  #   local_planner: dwb
-  #   inter_planner: navigate_w_replanning_time
-  #   agent_name: UrbanNav_FiLM
-
-  # ---- Ví dụ thêm CityWalker (cần thêm vào robot.launch.py trước) ----
-  # - name: CityWalker-v1
-  #   local_planner: dwb
-  #   inter_planner: navigate_w_replanning_time
-  #   agent_name: CityWalker_v1
-
-  # ---- Ví dụ RosNav RL ----
-  # - name: RosNav-RL
-  #   local_planner: rosnav_rl
-  #   inter_planner: navigate_w_replanning_time
-  #   agent_name: rosnav_agent_v1
+  # ---- CityWalker ----
+  # agent_name nên bắt đầu bằng "CityWalker"; phần sau prefix là basename checkpoint
+  - name: CityWalker-v1
+    local_planner: dwb
+    inter_planner: navigate_w_replanning_time
+    agent_name: CityWalker_last-v2

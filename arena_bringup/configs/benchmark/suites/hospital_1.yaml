@@ -2,7 +2,7 @@ stages:
 - config:
     SCENARIO:
       file: corridor_head_on
-  episodes: 2
+  episodes: 5
   map: hospital_1
   robot: turtlebot
   name: hospital_1_corridor_headon_turtlebot
@@ -12,40 +12,40 @@ stages:
 - config:
     SCENARIO:
       file: crossing_intersection
-  episodes: 1
+  episodes: 5
   map: hospital_1
   robot: turtlebot
   name: hospital_1_crossing_intersection_turtlebot
   tm_obstacles: scenario
   tm_robots: scenario
-  timeout: 60
+  timeout: 10
 - config:
     SCENARIO:
       file: doorway_bottleneck
-  episodes: 1
+  episodes: 5
   map: hospital_1
   robot: turtlebot
   name: hospital_1_doorway_bottleneck_turtlebot
   tm_obstacles: scenario
   tm_robots: scenario
-  timeout: 60
+  timeout: 10
 - config:
     SCENARIO:
       file: group_blocking
-  episodes: 1
+  episodes: 5
   map: hospital_1
   robot: turtlebot
   name: hospital_1_group_blocking_turtlebot
   tm_obstacles: scenario
   tm_robots: scenario
-  timeout: 60
+  timeout: 10
 - config:
     SCENARIO:
       file: overtaking
-  episodes: 1
+  episodes: 5
   map: hospital_1
   robot: turtlebot
   name: hospital_1_overtaking_turtlebot
   tm_obstacles: scenario
   tm_robots: scenario
-  timeout: 60
+  timeout: 10

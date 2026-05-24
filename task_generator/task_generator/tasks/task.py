@@ -257,6 +257,11 @@ class Task(_TaskRegistry, NodeInterface, Props_):
             self._is_resetting = True 
             self.__reset_start.publish(std_msgs.Empty())
 
+            for module in self.__modules:
+                module.before_reset()
+
+            # Let modules such as benchmark update contestant/stage parameters
+            # before the robot stack is spawned or refreshed for the episode.
             await self.robots_manager.set_up()
 
             if not self._train_mode:
@@ -269,9 +274,6 @@ class Task(_TaskRegistry, NodeInterface, Props_):
                     new_tm_obstacles := self.node.conf.TaskMode.TM_OBSTACLES.value
                 ) != self.__param_tm_obstacles:
                     self.set_tm_obstacles(new_tm_obstacles)
-
-            for module in self.__modules:
-                module.before_reset()
 
             # 1. Suspend nav goals so robot doesn't navigate with stale costmap
             self.suspend_all_goal_publishing()

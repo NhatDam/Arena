@@ -80,7 +80,7 @@ def Configuration(server: ROSParamServer):
         class Robot:
             GOAL_TOLERANCE_RADIUS = server.ROSParam[float](
                 'goal_tolerance_radius',
-                2.5
+                0.25
             )
 
             GOAL_TOLERANCE_ANGLE = server.ROSParam[float](

@@ -117,9 +117,9 @@ def generate_launch_description():
         citywalker_root,
         'ros2_nodes',
         'citywalker',
-        'citywalker_node.py',
+        'citywalker_dwb_node.py',
     )
-    citywalker_config_path = os.path.join(citywalker_root, 'configs', 'default.yaml')
+    citywalker_config_path = os.path.join(citywalker_root, 'config', 'citywalker_one.yaml')
 
     data_recorder = launch_ros.actions.Node(
         package='arena_evaluation',
@@ -179,8 +179,9 @@ def generate_launch_description():
         output='screen',
         condition=IfCondition(
             PythonExpression([
-                '"SocialNav" in "', record_data_dir.substitution, '" and "',
-                local_planner.substitution, '" == "dwb"'
+                '"', agent_name.substitution, '".startswith("SocialNav") and "',
+                local_planner.substitution, '" == "dwb" and "',
+                train_mode.substitution, '" == "false"'
             ])
         ),
     )
@@ -192,21 +193,26 @@ def generate_launch_description():
             '--ros-args',
             '-r', PythonExpression(['"__node:=socialnav_dwb_controller_" + "', namespace.substitution, '".strip("/").replace("/", "_")']),
             '-p', f'model_config_path:={socialnav_config_path}',
-            '-p', f'model_checkpoint_path:={socialnav_ckpt_path}', # SỬA DÒNG NÀY
+            '-p', PythonExpression(['"agent_name:=', agent_name.substitution, '"']),
             '-p', 'history_length:=8',
             '-p', 'control_frequency:=10.0',
             '-p', 'look_ahead_distance:=0.5',
             '-p', 'max_linear_velocity:=1.0',
             '-p', 'max_angular_velocity:=1.5',
             '-p', 'arrival_threshold:=0.25',
+            '-p', 'use_arrival_completion:=false',
+            '-p', 'goal_completion_radius:=0.25',
             '-p', 'enable_human_tracking:=true',
             '-p', 'max_humans:=10',
+            '-p', PythonExpression(['"robot_namespace:=', namespace.substitution, '"']),
+            '-p', 'instruction_topic:=/nav_instruction',
         ],
         output='screen',
         condition=IfCondition(
             PythonExpression([
-                '"SocialNav" in "', record_data_dir.substitution, '" and "',
-                local_planner.substitution, '" == "dwb"'
+                '"', agent_name.substitution, '".startswith("SocialNav") and "',
+                local_planner.substitution, '" == "dwb" and "',
+                train_mode.substitution, '" == "false"'
             ])
         ),
     )
@@ -226,16 +232,15 @@ def generate_launch_description():
             '-p',
             f'model_config_path:={urbannav_config_path}',
             '-p',
-            PythonExpression([
-                '"model_checkpoint_path:=', social_nav_root, '/ckpt/',
-                agent_name.substitution, '.pth"'
-            ]),
+            PythonExpression(['"agent_name:=', agent_name.substitution, '"']),
             '-p', 'history_length:=8',
             '-p', 'control_frequency:=10.0',
             '-p', 'look_ahead_distance:=0.5',
             '-p', 'max_linear_velocity:=1.0',
             '-p', 'max_angular_velocity:=1.5',
             '-p', 'arrival_threshold:=0.7',
+            '-p', 'use_arrival_completion:=false',
+            '-p', 'goal_completion_radius:=0.25',
             '-p',
             PythonExpression(['"robot_namespace:=', namespace.substitution, '"']),
             '-p', 'instruction_topic:=/nav_instruction',
@@ -266,16 +271,13 @@ def generate_launch_description():
             ]),
             '-p', f'model_config_path:={citywalker_config_path}',
             '-p',
-            PythonExpression([
-                '"model_checkpoint_path:=', citywalker_root, '/ckpt/',
-                agent_name.substitution, '.pth"'
-            ]),
-            '-p', 'history_length:=8',
+            PythonExpression(['"agent_name:=', agent_name.substitution, '"']),
             '-p', 'control_frequency:=10.0',
             '-p', 'look_ahead_distance:=0.5',
             '-p', 'max_linear_velocity:=1.0',
             '-p', 'max_angular_velocity:=1.5',
-            '-p', 'arrival_threshold:=0.7',
+            '-p', 'use_arrival_completion:=false',
+            '-p', 'goal_completion_radius:=0.25',
             '-p',
             PythonExpression(['"robot_namespace:=', namespace.substitution, '"']),
             '-p', 'instruction_topic:=/nav_instruction',

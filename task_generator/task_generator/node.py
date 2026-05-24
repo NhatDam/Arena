@@ -57,6 +57,7 @@ class TaskGenerator(ArenaMixinNode, SafeCallbackNode):
 
         super().__init__('task_generator')
         self.conf = Configuration(self)
+        self.rosparam[bool].set('initialized', False)
 
         self._namespace = Namespace(namespace)
 
