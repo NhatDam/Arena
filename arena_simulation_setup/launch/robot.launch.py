@@ -15,7 +15,13 @@ import launch.substitutions
 
 def generate_launch_description():
 
-    ss_path = FindPackageShare('arena_simulation_setup')
+    workspace_dir = os.environ.get('WORKSPACE_DIR', os.path.expanduser('~/arena5_ws'))
+    source_sim_setup_root = os.path.join(workspace_dir, 'src', 'Arena', 'arena_simulation_setup')
+    ss_path = (
+        source_sim_setup_root
+        if os.path.exists(source_sim_setup_root)
+        else FindPackageShare('arena_simulation_setup')
+    )
 
     ld_items = []
     LaunchArgument.auto_append(ld_items)
@@ -27,6 +33,7 @@ def generate_launch_description():
     robot = LaunchArgument("robot")
     frame = LaunchArgument("frame")
     agent_name = LaunchArgument('agent_name', default_value='')
+    goal_tolerance_radius = LaunchArgument('goal_tolerance_radius', default_value='0.25')
 
     global_planner = LaunchArgument("global_planner")
     local_planner = LaunchArgument("local_planner")
@@ -71,8 +78,6 @@ def generate_launch_description():
             **train_mode.dict,
         }.items(),
     )
-
-    workspace_dir = os.environ.get('WORKSPACE_DIR', os.path.expanduser('~/arena5_ws'))
 
     # ---- SocialNav / UrbanNav paths ----
     social_nav_root = next(
@@ -199,9 +204,9 @@ def generate_launch_description():
             '-p', 'look_ahead_distance:=0.5',
             '-p', 'max_linear_velocity:=1.0',
             '-p', 'max_angular_velocity:=1.5',
-            '-p', 'arrival_threshold:=0.25',
+            '-p', PythonExpression(['"arrival_threshold:=', goal_tolerance_radius.substitution, '"']),
             '-p', 'use_arrival_completion:=false',
-            '-p', 'goal_completion_radius:=0.25',
+            '-p', PythonExpression(['"goal_completion_radius:=', goal_tolerance_radius.substitution, '"']),
             '-p', 'enable_human_tracking:=true',
             '-p', 'max_humans:=10',
             '-p', PythonExpression(['"robot_namespace:=', namespace.substitution, '"']),
@@ -238,9 +243,9 @@ def generate_launch_description():
             '-p', 'look_ahead_distance:=0.5',
             '-p', 'max_linear_velocity:=1.0',
             '-p', 'max_angular_velocity:=1.5',
-            '-p', 'arrival_threshold:=0.7',
+            '-p', PythonExpression(['"arrival_threshold:=', goal_tolerance_radius.substitution, '"']),
             '-p', 'use_arrival_completion:=false',
-            '-p', 'goal_completion_radius:=0.25',
+            '-p', PythonExpression(['"goal_completion_radius:=', goal_tolerance_radius.substitution, '"']),
             '-p',
             PythonExpression(['"robot_namespace:=', namespace.substitution, '"']),
             '-p', 'instruction_topic:=/nav_instruction',
@@ -277,7 +282,7 @@ def generate_launch_description():
             '-p', 'max_linear_velocity:=1.0',
             '-p', 'max_angular_velocity:=1.5',
             '-p', 'use_arrival_completion:=false',
-            '-p', 'goal_completion_radius:=0.25',
+            '-p', PythonExpression(['"goal_completion_radius:=', goal_tolerance_radius.substitution, '"']),
             '-p',
             PythonExpression(['"robot_namespace:=', namespace.substitution, '"']),
             '-p', 'instruction_topic:=/nav_instruction',

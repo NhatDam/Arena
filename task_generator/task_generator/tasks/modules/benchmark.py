@@ -227,6 +227,7 @@ class Contest(typing.NamedTuple):
         local_planner: str
         inter_planner: str
         agent_name: str = ""
+        goal_tolerance_radius: typing.Optional[float] = None
 
         @classmethod
         def parse(cls, obj: typing.Dict) -> "Contest.Contestant":
@@ -236,6 +237,8 @@ class Contest(typing.NamedTuple):
             obj = dict(obj)
             obj.setdefault("inter_planner", "navigate_w_replanning_time")
             obj.setdefault("agent_name", "")
+            if obj.get("goal_tolerance_radius", None) is not None:
+                obj["goal_tolerance_radius"] = float(obj["goal_tolerance_radius"])
 
             raw_local_planner = str(obj["local_planner"])
             obj["local_planner"] = planner_aliases.get(
@@ -416,6 +419,13 @@ class Mod_Benchmark(TM_Module):
     ) -> bool:
         logger = self._logger
         changed = False
+
+        if contestant_config.goal_tolerance_radius is not None:
+            goal_radius = float(contestant_config.goal_tolerance_radius)
+            if self.node.conf.Robot.GOAL_TOLERANCE_RADIUS.value != goal_radius:
+                self.node.conf.Robot.GOAL_TOLERANCE_RADIUS.value = goal_radius
+                logger.info(f"[Benchmark] Goal tolerance radius ---> {goal_radius}")
+                changed = True
 
         for label, param, value in (
             ("Inter planner", self.node.conf.Robot.BEHAVIOR, contestant_config.inter_planner),

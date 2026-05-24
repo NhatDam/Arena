@@ -5,12 +5,14 @@ contestants:
     local_planner: dwb
     inter_planner: navigate_w_replanning_time
     agent_name: SocialNav_margin
+    goal_tolerance_radius: 2.5
 
   # ---- Baseline DWB thuần (không AI) ----
   - name: DWB-Baseline
     local_planner: dwb
     inter_planner: navigate_w_replanning_time
-    agent_name: ""          
+    agent_name: ""
+    goal_tolerance_radius: 0.25
 
   # ---- Urban Navigation (UrbanNav FiLM) ----
   # agent_name phải bắt đầu bằng "UrbanNav" và trùng basename checkpoint
@@ -18,6 +20,7 @@ contestants:
     local_planner: dwb
     inter_planner: navigate_w_replanning_time
     agent_name: UrbanNav_FiLM
+    goal_tolerance_radius: 0.7
 
   # ---- CityWalker ----
   # agent_name nên bắt đầu bằng "CityWalker"; phần sau prefix là basename checkpoint
@@ -25,3 +28,4 @@ contestants:
     local_planner: dwb
     inter_planner: navigate_w_replanning_time
     agent_name: CityWalker_last-v2
+    goal_tolerance_radius: 0.25

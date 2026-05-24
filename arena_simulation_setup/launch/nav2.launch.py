@@ -15,8 +15,12 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
-    ss_root = FindPackageShare('arena_simulation_setup')
-    robots_root = FindPackageShare('arena_robots')
+    workspace_dir = os.environ.get('WORKSPACE_DIR', os.path.expanduser('~/arena5_ws'))
+    source_ss_root = os.path.join(workspace_dir, 'src', 'Arena', 'arena_simulation_setup')
+    source_robots_root = os.path.join(workspace_dir, 'src', 'Arena', 'arena_robots', 'arena_robots')
+
+    ss_root = source_ss_root if os.path.exists(source_ss_root) else FindPackageShare('arena_simulation_setup')
+    robots_root = source_robots_root if os.path.exists(source_robots_root) else FindPackageShare('arena_robots')
     pkg_nav2_bringup = FindPackageShare('nav2_bringup')
 
     ld_items = []

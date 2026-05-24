@@ -553,6 +553,7 @@ class RobotManager(NodeInterface):
                 'scenario_file': self.node.get_parameter("task.scenario.file").value if self.node.has_parameter("task.scenario.file") else '',
                 'use_sim_time': 'True',
                 'amcl': 'true' if self.node.conf.Arena.SIM.value in (Constants.SimSimulator.GAZEBO,) else 'false',
+                'goal_tolerance_radius': str(self.node.conf.Robot.GOAL_TOLERANCE_RADIUS.value),
             }
 
             if self._robot.record_data_dir:
