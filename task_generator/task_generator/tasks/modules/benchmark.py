@@ -386,6 +386,14 @@ class Mod_Benchmark(TM_Module):
         # Apply per-stage timeout
         try:
             stage_timeout = float(suite_config.timeout)
+            min_timeout_raw = os.environ.get("ARENA_BENCHMARK_MIN_TIMEOUT_SEC", "0")
+            min_timeout = float(min_timeout_raw) if min_timeout_raw else 0.0
+            if min_timeout > 0 and stage_timeout < min_timeout:
+                logger.warning(
+                    f"[Benchmark] Stage timeout {stage_timeout}s is below "
+                    f"ARENA_BENCHMARK_MIN_TIMEOUT_SEC={min_timeout}s; using {min_timeout}s"
+                )
+                stage_timeout = min_timeout
             if self.node.conf.Robot.TIMEOUT.value != stage_timeout:
                 self.node.conf.Robot.TIMEOUT.value = stage_timeout
                 logger.info(f"[Benchmark] Timeout → {stage_timeout}s")
@@ -647,6 +655,14 @@ class Mod_Benchmark(TM_Module):
 
     def after_reset(self):
         self._episode_index += 1
+        
+        all_nav_ready = self._verify_all_nav_stacks_ready()
+        if not all_nav_ready:
+            self._logger.warning(
+                "[Benchmark] Navigation stack not marked ready at episode start; "
+                "starting metrics anyway and letting RobotManager defer goal publishing."
+            )
+        
         self._hunav_start_recording()
         self._log_episode()
 
@@ -708,6 +724,48 @@ class Mod_Benchmark(TM_Module):
             return
         episode_limit = int(self._suite.config(self._suite_index).episodes * self._config.suite.scale_episodes)
         self._logger.info(f"E [{1+self._episode_index}/{episode_limit}]")
+
+    def _verify_all_nav_stacks_ready(self) -> bool:
+        """
+        Verify that all robot navigation stacks are ACTIVE and ready for goal publishing.
+        This prevents sending goals to Nav2 stacks that are still in transition or ERROR states.
+        """
+        try:
+            # Access robot managers through the task
+            if not hasattr(self._TASK, 'robots_manager') or not hasattr(self._TASK.robots_manager, 'managers'):
+                self._logger.warning("[Benchmark] Could not access robot managers for nav stack verification")
+                return False
+            
+            robot_managers = self._TASK.robots_manager.managers.values()
+            if not robot_managers:
+                self._logger.warning("[Benchmark] No robot managers available")
+                return False
+            
+            for rm in robot_managers:
+                # Check if the robot manager has the _nav_stack_ready flag
+                if not hasattr(rm, '_nav_stack_ready'):
+                    self._logger.warning(
+                        f"[Benchmark] Robot manager {rm.name} does not have navigation readiness tracking"
+                    )
+                    return False
+                
+                if not rm._nav_stack_ready:
+                    self._logger.error(
+                        f"[Benchmark] Robot {rm.name} navigation stack NOT ready. "
+                        f"Status: _nav_stack_ready={rm._nav_stack_ready}"
+                    )
+                    return False
+                
+                self._logger.info(
+                    f"[Benchmark] ✓ Robot {rm.name} navigation stack is ACTIVE"
+                )
+            
+            return True
+        except Exception as e:
+            self._logger.error(
+                f"[Benchmark] Exception during nav stack verification: {e}"
+            )
+            return False
 
     @property
     def contest_index(self) -> Contest.Index:

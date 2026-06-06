@@ -21,6 +21,9 @@ class TM_Robots(TaskMode):
     async def reset(self, **kwargs):
         self._last_reset = self._PROPS.clock.clock.sec
 
+    def mark_episode_started(self):
+        self._last_reset = self._PROPS.clock.clock.sec
+
     async def set_position(self, pose: Pose):
         """
         Set the position of all robots.

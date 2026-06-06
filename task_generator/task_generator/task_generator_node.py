@@ -1,5 +1,6 @@
 #! /usr/bin/env python3
 import asyncio
+import os
 import traceback
 import rclpy
 import rclpy.executors
@@ -35,13 +36,21 @@ async def main_async(args=None):
     spin_future = loop.run_in_executor(None, spin_blocking, executor)
     app_task = asyncio.create_task(app_logic(node))
 
+    async def wait_for_first_completion():
+        return await asyncio.wait(
+            [spin_future, app_task],
+            return_when=asyncio.FIRST_COMPLETED
+        )
+
     try:
-        import aiomonitor
-        with aiomonitor.start_monitor(loop=loop, locals=locals()):
-            done, _ = await asyncio.wait(
-                [spin_future, app_task],
-                return_when=asyncio.FIRST_COMPLETED
-            )
+        disable_monitor = os.getenv('ARENA_DISABLE_AIOMONITOR', '').strip().lower() in ('1', 'true', 'yes', 'on')
+        if disable_monitor:
+            node.get_logger().info('aiomonitor disabled by ARENA_DISABLE_AIOMONITOR')
+            done, _ = await wait_for_first_completion()
+        else:
+            import aiomonitor
+            with aiomonitor.start_monitor(loop=loop, locals=locals()):
+                done, _ = await wait_for_first_completion()
 
         if spin_future in done:
             spin_future.result()

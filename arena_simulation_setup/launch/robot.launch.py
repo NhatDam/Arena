@@ -1,3 +1,4 @@
+import glob
 import os
 
 import launch_ros
@@ -11,6 +12,30 @@ import launch
 import launch.actions
 import launch.launch_description_sources
 import launch.substitutions
+
+
+def _build_ai_library_path(ai_python: str) -> str:
+    paths = []
+
+    configured_path = os.environ.get('SOCIALNAV_AI_RUNTIME_LIBRARY_PATH', '')
+    if configured_path:
+        paths.extend(configured_path.split(':'))
+
+    if os.path.isabs(ai_python):
+        ai_prefix = os.path.abspath(os.path.join(os.path.dirname(ai_python), os.pardir))
+        paths.append(os.path.join(ai_prefix, 'lib'))
+        for site_packages in glob.glob(os.path.join(ai_prefix, 'lib', 'python*', 'site-packages')):
+            paths.extend(sorted(glob.glob(os.path.join(site_packages, 'nvidia', '*', 'lib'))))
+
+    seen = set()
+    valid = []
+    for path in paths:
+        real_path = os.path.realpath(path) if path else ''
+        if real_path and os.path.isdir(real_path) and real_path not in seen:
+            seen.add(real_path)
+            valid.append(real_path)
+
+    return ':'.join(valid)
 
 
 def generate_launch_description():
@@ -115,6 +140,23 @@ def generate_launch_description():
     socialnav_ckpt_path = os.path.join(social_nav_root, 'ckpt', 'SocialNav_margin.pth')
     urbannav_ckpt_path = os.path.join(social_nav_root, 'ckpt', 'UrbanNav_FiLM.pth')
 
+    ai_python = os.environ.get('SOCIALNAV_AI_PYTHON', 'python3')
+    ai_process_env = {
+        'PYTHONUNBUFFERED': '1',
+        'RCUTILS_LOGGING_BUFFERED_STREAM': '0',
+    }
+    ai_python_no_user_site = os.environ.get('SOCIALNAV_AI_PYTHONNOUSERSITE', '1')
+    if ai_python_no_user_site:
+        ai_process_env['PYTHONNOUSERSITE'] = ai_python_no_user_site
+    ai_library_path = _build_ai_library_path(ai_python)
+    if ai_library_path:
+        current_library_path = os.environ.get('LD_LIBRARY_PATH', '')
+        ai_process_env['LD_LIBRARY_PATH'] = (
+            f'{ai_library_path}:{current_library_path}'
+            if current_library_path
+            else ai_library_path
+        )
+
     # ---- CityWalker paths ----
     # Thêm block này khi tích hợp arena-citywalker
     citywalker_root = os.path.join(workspace_dir, 'src', 'arena-citywalker')
@@ -194,7 +236,7 @@ def generate_launch_description():
     # ---- SocialNav controller ----
     socialnav_controller = launch.actions.ExecuteProcess(
         cmd=[
-            'python3', socialnav_controller_script,
+            ai_python, socialnav_controller_script,
             '--ros-args',
             '-r', PythonExpression(['"__node:=socialnav_dwb_controller_" + "', namespace.substitution, '".strip("/").replace("/", "_")']),
             '-p', f'model_config_path:={socialnav_config_path}',
@@ -204,12 +246,23 @@ def generate_launch_description():
             '-p', 'look_ahead_distance:=0.5',
             '-p', 'max_linear_velocity:=1.0',
             '-p', 'max_angular_velocity:=1.5',
+            '-p', 'fallback_to_dwb:=true',
+            '-p', 'allow_pure_pursuit_fallback:=false',
+            '-p', 'reset_on_eval_dropout:=false',
+            '-p', 'initial_eval_wait_sec:=5.0',
+            '-p', 'max_eval_staleness_sec:=5.0',
+            '-p', 'startup_data_timeout_sec:=30.0',
+            '-p', 'enable_bev_visualization:=true',
+            '-p', 'bev_visualization_period_sec:=1.0',
+            '-p', 'dwb_cmd_staleness_sec:=1.0',
             '-p', PythonExpression(['"arrival_threshold:=', goal_tolerance_radius.substitution, '"']),
             '-p', 'use_arrival_completion:=false',
             '-p', PythonExpression(['"goal_completion_radius:=', goal_tolerance_radius.substitution, '"']),
             '-p', 'enable_human_tracking:=true',
             '-p', 'max_humans:=10',
             '-p', PythonExpression(['"robot_namespace:=', namespace.substitution, '"']),
+            '-p', PythonExpression(['"image_topic:=', namespace.substitution, '/rgbd_camera/image"']),
+            '-p', PythonExpression(['"dwb_cmd_topic:=', namespace.substitution, '/cmd_vel_nav_raw"']),
             '-p', 'instruction_topic:=/nav_instruction',
         ],
         output='screen',
@@ -220,12 +273,13 @@ def generate_launch_description():
                 train_mode.substitution, '" == "false"'
             ])
         ),
+        additional_env=ai_process_env,
     )
 
     # ---- UrbanNav controller ----
     urbannav_controller = launch.actions.ExecuteProcess(
         cmd=[
-            'python3',
+            ai_python,
             urbannav_controller_script,
             '--ros-args',
             '-r',
@@ -258,6 +312,7 @@ def generate_launch_description():
                 train_mode.substitution, '" == "false"'
             ])
         ),
+        additional_env=ai_process_env,
     )
 
     # ---- CityWalker controller ----
@@ -265,7 +320,7 @@ def generate_launch_description():
     # Điều kiện: agent_name phải bắt đầu bằng "CityWalker"
     citywalker_controller = launch.actions.ExecuteProcess(
         cmd=[
-            'python3',
+            ai_python,
             citywalker_controller_script,
             '--ros-args',
             '-r',
@@ -281,6 +336,7 @@ def generate_launch_description():
             '-p', 'look_ahead_distance:=0.5',
             '-p', 'max_linear_velocity:=1.0',
             '-p', 'max_angular_velocity:=1.5',
+            '-p', 'allow_pure_pursuit_fallback:=true',
             '-p', 'use_arrival_completion:=false',
             '-p', PythonExpression(['"goal_completion_radius:=', goal_tolerance_radius.substitution, '"']),
             '-p',
@@ -295,6 +351,7 @@ def generate_launch_description():
                 train_mode.substitution, '" == "false"'
             ])
         ),
+        additional_env=ai_process_env,
     )
 
     # ---- Pure DWB Baseline Controller (khi không dùng AI) ----
@@ -321,22 +378,6 @@ def generate_launch_description():
     #     ),
     # )
 
-    # ---- Thêm block cấu hình và khởi chạy Hunav Evaluator ----
-    metrics_config_path = os.path.join(workspace_dir, 'results', 'metrics.yaml')
-
-    hunav_evaluator_node = launch_ros.actions.Node(
-        package='hunav_evaluator',
-        executable='hunav_evaluator_node',
-        name='hunav_evaluator_node',
-        # Ép node này chạy ở root namespace để khớp với service mapping của benchmark.py
-        namespace='/', 
-        parameters=[metrics_config_path],
-        output='screen',
-        # Tùy chọn: Bạn có thể thêm condition nếu chỉ muốn bật evaluator khi đang lưu data
-        # condition=launch.conditions.IfCondition(PythonExpression(['bool("', record_data_dir.substitution, '")']))
-    )
-    # ---------------------------------------------------------
-
     lidar_relay = launch_ros.actions.Node(
         package='topic_tools',
         executable='relay',
@@ -361,7 +402,6 @@ def generate_launch_description():
         citywalker_controller,   
         # pure_dwb_controller,
         data_recorder,
-        hunav_evaluator_node, 
     ])
     return ld
 

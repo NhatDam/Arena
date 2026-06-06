@@ -1,5 +1,7 @@
 import asyncio
 import os
+import subprocess
+import time
 import typing
 
 import action_msgs.msg
@@ -17,6 +19,7 @@ import rclpy.client
 import rclpy.logging
 import rclpy.publisher
 import rclpy.timer
+import sensor_msgs.msg
 from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
 from arena_rclpy_mixins.shared import Namespace
 from arena_robots.Robot import RobotView
@@ -122,13 +125,154 @@ class RobotManager(NodeInterface):
         self._goal_timer = None
 
         self._publish_goal_task: typing.Optional[asyncio.Task] = None
+        self._goal_publishing_suspended = False
         self._launch_tasks: list[asyncio.Task] = []
+        self._nav_stack_ready: bool = False
+        self._last_dwb_cmd_log_time = 0.0
+        self._last_dwb_odom_log_time = 0.0
+        self._last_dwb_joint_log_time = 0.0
 
     async def _do_launch(self, launch_description: launch.LaunchDescription):
         """Launch and retain task handles so robot sidecars can be cancelled on destroy."""
         task = await self.node._launch_manager.launch_description(launch_description)
         self._launch_tasks.append(task)
         return task
+
+    async def _shutdown_launch_tasks(self):
+        """Shutdown launch services owned by this robot manager."""
+        if not self._launch_tasks:
+            return
+
+        shutdown_task = getattr(self.node._launch_manager, "shutdown_task", None)
+        if callable(shutdown_task):
+            await asyncio.gather(
+                *(shutdown_task(task) for task in self._launch_tasks),
+                return_exceptions=True,
+            )
+        else:
+            for task in self._launch_tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*self._launch_tasks, return_exceptions=True)
+
+        self._launch_tasks.clear()
+
+    def _namespace_node_paths(self, node_paths: set[str]) -> list[str]:
+        namespace_prefix = str(self.namespace)
+        return sorted(
+            path for path in node_paths
+            if path == namespace_prefix or path.startswith(f"{namespace_prefix}/")
+        )
+
+    async def _wait_for_namespace_nodes_gone(
+        self,
+        node_paths: set[str],
+        *,
+        timeout: float = 15.0,
+    ) -> bool:
+        """Wait for previously launched robot ROS nodes to disappear."""
+        deadline = asyncio.get_running_loop().time() + timeout
+        last_live: list[str] = []
+
+        while True:
+            live = self._namespace_node_paths(node_paths)
+            if not live:
+                return True
+
+            last_live = live
+            if asyncio.get_running_loop().time() >= deadline:
+                self._logger.warn(
+                    "Timed out waiting for old navigation nodes to stop: "
+                    f"{last_live[:8]}"
+                )
+                await self._actively_kill_nav_nodes()
+                cleanup_deadline = asyncio.get_running_loop().time() + 10.0
+                while asyncio.get_running_loop().time() < cleanup_deadline:
+                    live = self._namespace_node_paths(node_paths)
+                    if not live:
+                        return True
+                    last_live = live
+                    await asyncio.sleep(0.5)
+
+                self._logger.warn(
+                    "Old navigation nodes still visible after cleanup; "
+                    f"continuing after targeted process termination: {last_live[:8]}"
+                )
+                for path in last_live:
+                    node_paths.discard(path)
+                return True
+
+            await asyncio.sleep(0.25)
+
+    async def _actively_kill_nav_nodes(self):
+        """Actively terminate Nav2 nodes in the namespace to force cleanup."""
+        namespace = str(self.namespace)
+        namespace_token = f"__ns:={namespace}"
+        compact_namespace = namespace.strip("/").replace("/", "_")
+        patterns = [
+            namespace_token,
+            rf"(controller_server|planner_server|bt_navigator|behavior_server|waypoint_follower|velocity_smoother|collision_monitor|smoother_server).*{namespace}",
+            rf"(socialnav|urbannav|citywalker|human_states_bridge).*{compact_namespace}",
+        ]
+
+        self._logger.warn(f"[Nav Stack] Terminating stale processes for {namespace}")
+        for signal_name in ("-TERM", "-KILL"):
+            for pattern in patterns:
+                try:
+                    subprocess.run(
+                        ["pkill", signal_name, "-f", pattern],
+                        timeout=2,
+                        capture_output=True,
+                        check=False,
+                    )
+                except Exception as exc:
+                    self._logger.debug(
+                        f"[Nav Stack] Could not run pkill {signal_name} for {pattern}: {exc}"
+                    )
+            await asyncio.sleep(1.0)
+
+    async def _wait_for_navigation_stack_active(
+        self,
+        *,
+        timeout: float = 30.0,
+    ) -> bool:
+        """Wait until the relaunched Nav2 stack is usable."""
+        lifecycle_nodes = [
+            self.namespace("controller_server"),
+            self.namespace("planner_server"),
+            self.namespace("bt_navigator"),
+            self.namespace("local_costmap/local_costmap"),
+            self.namespace("global_costmap/global_costmap"),
+        ]
+        pending = {str(node) for node in lifecycle_nodes}
+        last_state: dict[str, str] = {}
+        deadline = asyncio.get_running_loop().time() + timeout
+
+        while pending:
+            for node_name in list(pending):
+                try:
+                    state = await self.node.get_lifecycle_state_async(node_name, timeout=1.0)
+                    last_state[node_name] = f"{state.label or '<unknown>'}({state.id})"
+                    if state.id == lifecycle_msgs.msg.State.PRIMARY_STATE_ACTIVE:
+                        pending.remove(node_name)
+                except Exception as exc:
+                    last_state[node_name] = type(exc).__name__
+
+            if not pending:
+                self._logger.info("Navigation stack is ACTIVE")
+                return True
+
+            if asyncio.get_running_loop().time() >= deadline:
+                self._logger.warn(
+                    "Navigation stack did not become ACTIVE before timeout: "
+                    + ", ".join(
+                        f"{name}={last_state.get(name, 'unknown')}"
+                        for name in sorted(pending)
+                    )
+                )
+                return False
+
+            await asyncio.sleep(0.5)
 
     async def _odom_base_transform(self):
         """Launch a static transform publisher for odometry to base frame.
@@ -184,6 +328,20 @@ class RobotManager(NodeInterface):
             nav_msgs.Odometry,
             self.namespace("odom"),
             self._robot_pos_callback,
+            10
+        )
+
+        self.node.create_subscription(
+            geometry_msgs.msg.Twist,
+            self.namespace("cmd_vel"),
+            self._cmd_vel_callback,
+            10
+        )
+
+        self.node.create_subscription(
+            sensor_msgs.msg.JointState,
+            self.namespace("joint_states"),
+            self._joint_states_callback,
             10
         )
 
@@ -364,6 +522,7 @@ class RobotManager(NodeInterface):
         if self._publish_goal_task is not None:
             self._publish_goal_task.cancel()
             self._publish_goal_task = None
+        self._goal_publishing_suspended = True
 
     def resume_goal_publishing(self):
         """Restart the goal publishing loop.
@@ -371,6 +530,7 @@ class RobotManager(NodeInterface):
         Call this after the costmap lifecycle cycle is complete so Nav2
         starts with a clean observation buffer.
         """
+        self._goal_publishing_suspended = False
         if self._goal_pos is not None and not self._is_goal_reached:
             if self._publish_goal_task is not None:
                 self._publish_goal_task.cancel()
@@ -458,7 +618,9 @@ class RobotManager(NodeInterface):
             self._goal_active = False
             if self._publish_goal_task is not None:
                 self._publish_goal_task.cancel()
-            self._publish_goal_task = asyncio.create_task(self._publish_goal_loop())
+            self._publish_goal_task = None
+            if not self._goal_publishing_suspended:
+                self._publish_goal_task = asyncio.create_task(self._publish_goal_loop())
 
             if self._robot.record_data_dir:
                 self.node.rosparam[list[float]].set(
@@ -473,8 +635,29 @@ class RobotManager(NodeInterface):
         self.node.get_logger().warn("🟢 [DEBUG] Waiting 1.5s for Isaac Sim TF & Costmap...")
         await asyncio.sleep(1.5) 
         
-        if self._is_goal_reached:
+        if self._goal_publishing_suspended:
+            self._logger.debug("[Goal Publishing] Goal publishing suspended")
             return
+        
+        if self._is_goal_reached:
+            self._logger.debug("[Goal Publishing] Goal already reached")
+            return
+
+        if not self._nav_stack_ready:
+            timeout = float(os.environ.get("ARENA_NAV2_GOAL_READY_TIMEOUT_SEC", "90"))
+            self._logger.warn(
+                f"[Goal Publishing] Waiting up to {timeout:.0f}s for Nav2 stack "
+                "after Isaac TF/clock warmup..."
+            )
+            self._nav_stack_ready = await self._wait_for_navigation_stack_active(
+                timeout=timeout,
+            )
+            if not self._nav_stack_ready:
+                self._logger.error(
+                    "[Goal Publishing] Navigation stack NOT ready after deferred wait. "
+                    "Skipping this goal send so benchmark can reincarnate cleanly."
+                )
+                return
 
         goal = self._goal_pos
         self.node.get_logger().warn(f"🚀 [ROBOT MANAGER] Target Goal: x={goal.position.x}, y={goal.position.y}")
@@ -594,6 +777,17 @@ class RobotManager(NodeInterface):
             while bt_node_path not in node_paths:
                 await asyncio.sleep(0.01)
 
+            self._nav_stack_ready = await self._wait_for_navigation_stack_active(
+                timeout=float(os.environ.get("ARENA_NAV2_INITIAL_READY_TIMEOUT_SEC", "90")),
+            )
+            if self._nav_stack_ready:
+                self._logger.info("[Nav Stack] Navigation stack is ready for goal publishing")
+            else:
+                self._logger.warn(
+                    "[Nav Stack] Not ACTIVE during initial launch probe; "
+                    "goal publishing will retry after Isaac TF/clock warmup."
+                )
+
     def _robot_pos_callback(self, data: nav_msgs.Odometry):
         """Callback for robot position updates.
 
@@ -609,6 +803,75 @@ class RobotManager(NodeInterface):
                 current_position.position.y,
             ),
             Orientation.from_msg(quat)
+        )
+        self._log_dwb_velocity(
+            "odom",
+            data.twist.twist.linear.x,
+            data.twist.twist.angular.z,
+            "_last_dwb_odom_log_time",
+        )
+
+    def _should_log_dwb_baseline_velocity(self) -> bool:
+        local_planner = str(getattr(self._robot, "local_planner", "") or "").lower()
+        agent = str(getattr(self._robot, "agent", "") or "").strip()
+        return local_planner == "dwb" and not agent and self._goal_active
+
+    def _log_dwb_velocity(
+        self,
+        source: str,
+        linear_velocity: float,
+        angular_velocity: float,
+        last_log_attr: str,
+    ):
+        if not self._should_log_dwb_baseline_velocity():
+            return
+
+        period = float(os.environ.get("ARENA_DWB_VELOCITY_LOG_PERIOD_SEC", "1.0"))
+        now = time.monotonic()
+        if now - getattr(self, last_log_attr) < period:
+            return
+
+        setattr(self, last_log_attr, now)
+        self.node.get_logger().warn(
+            f"[DWB VELOCITY] {self.name} {source}: "
+            f"v={linear_velocity:.3f} m/s, w={angular_velocity:.3f} rad/s"
+        )
+
+    def _cmd_vel_callback(self, data: geometry_msgs.msg.Twist):
+        self._log_dwb_velocity(
+            "cmd_vel",
+            data.linear.x,
+            data.angular.z,
+            "_last_dwb_cmd_log_time",
+        )
+
+    def _joint_states_callback(self, data: sensor_msgs.msg.JointState):
+        if not self._should_log_dwb_baseline_velocity():
+            return
+
+        period = float(os.environ.get("ARENA_DWB_VELOCITY_LOG_PERIOD_SEC", "1.0"))
+        now = time.monotonic()
+        if now - self._last_dwb_joint_log_time < period:
+            return
+
+        self._last_dwb_joint_log_time = now
+        velocities = dict(zip(data.name, data.velocity))
+        wheel_names = ("left_wheel_joint", "right_wheel_joint")
+        wheel_velocities = {name: velocities.get(name) for name in wheel_names}
+
+        if all(value is not None for value in wheel_velocities.values()):
+            self.node.get_logger().warn(
+                f"[DWB VELOCITY] {self.name} joint_states: "
+                f"left_wheel_joint={wheel_velocities['left_wheel_joint']:.3f} rad/s, "
+                f"right_wheel_joint={wheel_velocities['right_wheel_joint']:.3f} rad/s"
+            )
+            return
+
+        wheel_like_names = [name for name in data.name if "wheel" in name.lower()]
+        self.node.get_logger().warn(
+            f"[DWB VELOCITY] {self.name} joint_states: "
+            f"missing target wheel joints {wheel_names}; "
+            f"wheel-like joints={wheel_like_names}; total_joints={len(data.name)}"
         )
 
     def _goal_status_callback(self, data: action_msgs.msg.GoalStatusArray):
@@ -677,10 +940,7 @@ class RobotManager(NodeInterface):
         request = arena_evaluation_srvs.ChangeDirectory.Request()
         request.data = record_data_dir
 
-        future = client.call_async(request)
-        await future
-
-        response = future.result()
+        response = await self.node.await_ros(client.call_async(request))
         if response is None or not response.result:
             self._logger.warning(
                 f"Data recorder at {service_name} rejected directory change to {record_data_dir}"
@@ -691,19 +951,63 @@ class RobotManager(NodeInterface):
             f"Data recorder for {self.name} switched to {record_data_dir}"
         )
 
-    async def update(self, robot: typing.Optional[Robot] = None):
-        """Live-update robot sidecars that can change without a full relaunch."""
+    async def update(
+        self,
+        robot: typing.Optional[Robot] = None,
+        *,
+        node_paths: typing.Optional[set[str]] = None,
+    ):
+        """Live-update robot sidecars without respawning the Isaac robot."""
         if robot is None:
             return
 
+        nav_config_changed = any(
+            getattr(self._robot, attr) != getattr(robot, attr)
+            for attr in (
+                "inter_planner",
+                "local_planner",
+                "global_planner",
+                "agent",
+            )
+        )
         old_record_data_dir = self._robot.record_data_dir
         new_record_data_dir = robot.record_data_dir
 
         self._robot = attrs.evolve(
             self._robot,
+            inter_planner=robot.inter_planner,
+            local_planner=robot.local_planner,
+            global_planner=robot.global_planner,
+            agent=robot.agent,
             record_data_dir=new_record_data_dir,
             extra=robot.extra,
         )
+        self._robot.extra.setdefault('namespace', self.namespace)
+
+        if nav_config_changed:
+            self._logger.info(
+                f"Relaunching navigation stack for {self.name} "
+                f"(local_planner={self._robot.local_planner}, agent={self._robot.agent})"
+            )
+            self.suspend_goal_publishing()
+            # Reset nav stack readiness flag during reincarnation
+            self._nav_stack_ready = False
+
+            await self._shutdown_launch_tasks()
+
+            if node_paths is None:
+                # Fallback for direct callers: launch without a live node-path
+                # watcher instead of blocking forever. RobotsManagerROS passes
+                # a watched set during benchmark reconfiguration.
+                await asyncio.sleep(2.0)
+                node_paths = {str(self.namespace('bt_navigator'))}
+            else:
+                await self._wait_for_namespace_nodes_gone(node_paths)
+                for path in self._namespace_node_paths(node_paths):
+                    node_paths.discard(path)
+
+            await self._launch_robot(node_paths)
+            return
 
         if old_record_data_dir == new_record_data_dir or not new_record_data_dir:
             return
@@ -720,10 +1024,5 @@ class RobotManager(NodeInterface):
         if self._goal_timer is not None:
             self._goal_timer.cancel()
             self._goal_timer.destroy()
-        for task in self._launch_tasks:
-            if not task.done():
-                task.cancel()
-        if self._launch_tasks:
-            await asyncio.gather(*self._launch_tasks, return_exceptions=True)
-            self._launch_tasks.clear()
+        await self._shutdown_launch_tasks()
         await self._environment_manager.remove_robot((self.robot,))

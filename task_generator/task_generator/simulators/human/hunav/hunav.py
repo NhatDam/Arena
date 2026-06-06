@@ -1,4 +1,5 @@
 import asyncio
+import action_msgs.msg
 import math
 import os
 import time
@@ -311,6 +312,8 @@ class HunavHumanSimulator(
         self._robot_prev_time: typing.Optional[float] = None
         self._robot_cmd_vel: typing.Optional[geometry_msgs.msg.Twist] = None
         self._robot_current_goal: typing.Optional[geometry_msgs.msg.Pose] = None
+        self._robot_nav_status: int = action_msgs.msg.GoalStatus.STATUS_UNKNOWN
+        self._robot_nav_status_sub: typing.Optional[rclpy.node.Subscription] = None
 
         self._logger.debug("Collections initialized")
 
@@ -531,7 +534,21 @@ class HunavHumanSimulator(
         """Update the robot's current navigation goal for hunav evaluator metrics."""
         self._robot_current_goal = msg.pose
         self._robot_agent_msg.goals = [msg.pose]
+        # Reset nav status at the beginning of a fresh goal so completion is
+        # evaluated only from this episode's terminal action status.
+        self._robot_nav_status = action_msgs.msg.GoalStatus.STATUS_UNKNOWN
+        self._robot_agent_msg.behavior.state = int(self._robot_nav_status)
         self._logger.debug(f"Robot goal updated: ({msg.pose.position.x:.2f}, {msg.pose.position.y:.2f})")
+
+    def _robot_nav_status_callback(self, msg: action_msgs.msg.GoalStatusArray):
+        """Track latest nav2 goal status for episode completion metrics."""
+        last_goal = next(reversed(list(msg.status_list)), None)
+        if last_goal is None:
+            return
+        self._robot_nav_status = int(last_goal.status)
+        # Reuse the robot behavior.state field to carry nav2 goal status
+        # through the existing hunav evaluator transport message.
+        self._robot_agent_msg.behavior.state = self._robot_nav_status
 
     def _setup_robot_odom_subscription(self):
         """Subscribe to the robot's odom, cmd_vel, and goal_pose topics for hunav evaluator.
@@ -551,6 +568,9 @@ class HunavHumanSimulator(
 
             if not robot_name:
                 return False
+
+            # Persist robot name on the evaluator stream for traceability.
+            self._robot_agent_msg.name = robot_name
 
             # Subscribe to odom
             robot_odom_topic = self._namespace(robot_name, 'odom')
@@ -581,6 +601,17 @@ class HunavHumanSimulator(
                 10
             )
             self._logger.info(f"Subscribed to robot goal on {robot_goal_topic}")
+
+            # Subscribe to nav2 action status to determine episode completion
+            # strictly from terminal status semantics.
+            robot_status_topic = self._namespace(robot_name, 'navigate_to_pose', '_action', 'status')
+            self._robot_nav_status_sub = self.node.create_subscription(
+                action_msgs.msg.GoalStatusArray,
+                robot_status_topic,
+                self._robot_nav_status_callback,
+                1,
+            )
+            self._logger.info(f"Subscribed to robot nav status on {robot_status_topic}")
 
             # Set robot radius from param
             try:

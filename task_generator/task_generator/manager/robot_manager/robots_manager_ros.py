@@ -92,6 +92,7 @@ class RobotsManagerROS(NodeInterface, RobotsManager):
             async def task():
                 while True:
                     latest = self.node.get_node_names_and_namespaces()
+                    paths.clear()
                     paths.update(os.path.join(ns, name) for name, ns in latest)
                     await asyncio.sleep(1.0)
             t = asyncio.create_task(task())
@@ -161,9 +162,30 @@ class RobotsManagerROS(NodeInterface, RobotsManager):
 
         existing_keys = set(existing.keys())
         matchable_keys = set(existing_keys)
+        reserved_reuse_keys: set[str] = set()
 
         to_add: dict[str, Robot] = {}
         to_update: dict[str, Robot] = {}
+
+        def reusable_existing_key(config: Robot) -> str | None:
+            """Find an existing robot that can keep its Isaac prim in place.
+
+            Benchmark contestant changes often only swap Nav2/AI sidecars
+            (agent/local planner/recording path). Removing and respawning the
+            physical robot in Isaac during that handoff can leave sensors and
+            odom unavailable, so prefer an in-place manager update whenever the
+            robot model and namespace can be reused.
+            """
+            return next(
+                (
+                    key
+                    for key in sorted(matchable_keys)
+                    if key not in reserved_reuse_keys
+                    and existing[key].model.name == config.model.name
+                    and (key == config.model.name or key.startswith(f"{config.model.name}_"))
+                ),
+                None,
+            )
 
         # explicit naming first
         for prefix, config in parsed_explicit.items():
@@ -173,7 +195,14 @@ class RobotsManagerROS(NodeInterface, RobotsManager):
             )
 
             if match is None:  # no matches
-                to_add[prefix] = config
+                if (
+                    prefix in matchable_keys
+                    and existing[prefix].model.name == config.model.name
+                ):
+                    to_update[prefix] = config
+                    matchable_keys.remove(prefix)
+                else:
+                    to_add[prefix] = config
             else:  # exact match
                 matchable_keys.remove(match)
 
@@ -193,13 +222,39 @@ class RobotsManagerROS(NodeInterface, RobotsManager):
                 )
 
                 if match is None:  # no similar robot found
-                    unassigned.append(config)
+                    reusable_key = reusable_existing_key(config)
+                    if reusable_key is not None:
+                        reserved_reuse_keys.add(reusable_key)
+                        to_update[reusable_key] = config
+                        matchable_keys.remove(reusable_key)
+                    else:
+                        unassigned.append(config)
                 else:  # similar robot found, update
                     to_update[match] = config
                     matchable_keys.remove(match)
 
             i: int = 0
             for anon in unassigned:
+                # If an anonymous robot is being replaced because only the
+                # planner/agent config changed, keep the previous name. This
+                # avoids namespace drift such as turtlebot -> turtlebot_1 when
+                # the benchmark switches contestants.
+                reusable_key = next(
+                    (
+                        key
+                        for key in sorted(matchable_keys)
+                        if key not in reserved_reuse_keys
+                        and existing[key].model.name == anon.model.name
+                        and (key == prefix or key.startswith(f"{prefix}_"))
+                    ),
+                    None,
+                )
+                if reusable_key is not None:
+                    suffixed_key = reusable_key
+                    reserved_reuse_keys.add(reusable_key)
+                    to_add[suffixed_key] = anon
+                    continue
+
                 suffixed_key = prefix
 
                 if len(configs) > 1:
@@ -220,40 +275,45 @@ class RobotsManagerROS(NodeInterface, RobotsManager):
         return self._diff
 
     async def set_up(self):
-        futures: list[typing.Awaitable] = []
+        removal_futures: list[typing.Awaitable] = []
         for robot_name in self._diff.to_remove:
-            futures.append(self.managers.pop(robot_name).destroy())
+            removal_futures.append(self.managers.pop(robot_name).destroy())
         self._diff.to_remove.clear()
 
-        for robot_name, config in self._diff.to_update.items():
-            futures.append(self.managers[robot_name].update(config))
-            # TODO
-        self._diff.to_update.clear()
+        if removal_futures:
+            await asyncio.gather(*removal_futures)
+            await asyncio.sleep(0.5)
 
         node_paths: set[str] = set()
-        for robot_name, config in self._diff.to_add.items():
-            config = attrs.evolve(config)
-            config.name = robot_name
-            config.pose = next(self._initialpose)
-            manager = RobotManager(
-                node=self.node,
-                namespace=Namespace(self.node.get_namespace())(
-                    self.node.get_name(),
-                ),
-                environment_manager=self._environment_manager,
-                robot=config
-            )
-            futures.append(manager.set_up_robot(node_paths))
-            self.managers[robot_name] = manager
-
         with self.provide_node_paths(node_paths) as fetch_task:
-            await asyncio.wait(
-                (
-                    fetch_task,
-                    asyncio.gather(*futures),
-                ),
-                return_when=asyncio.FIRST_COMPLETED,
-            )
+            deadline = asyncio.get_running_loop().time() + 2.0
+            while not node_paths and asyncio.get_running_loop().time() < deadline:
+                if fetch_task.done():
+                    break
+                await asyncio.sleep(0.1)
+
+            futures: list[typing.Awaitable] = []
+            for robot_name, config in self._diff.to_update.items():
+                futures.append(self.managers[robot_name].update(config, node_paths=node_paths))
+            self._diff.to_update.clear()
+
+            for robot_name, config in self._diff.to_add.items():
+                config = attrs.evolve(config)
+                config.name = robot_name
+                config.pose = next(self._initialpose)
+                manager = RobotManager(
+                    node=self.node,
+                    namespace=Namespace(self.node.get_namespace())(
+                        self.node.get_name(),
+                    ),
+                    environment_manager=self._environment_manager,
+                    robot=config
+                )
+                futures.append(manager.set_up_robot(node_paths))
+                self.managers[robot_name] = manager
+
+            if futures:
+                await asyncio.gather(*futures)
         self._diff.to_add.clear()
 
         self.node.rosparam[list[str]].set('robot_names', [robot.name for robot in self.managers.values()])

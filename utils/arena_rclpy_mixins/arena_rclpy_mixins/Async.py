@@ -8,6 +8,7 @@ import typing
 import rclpy.client
 import rclpy.node
 import rclpy.qos
+import rclpy.task
 
 import launch
 
@@ -19,6 +20,7 @@ T = typing.TypeVar('T')
 class AsyncLaunchManager:
     def __init__(self):
         self.active_tasks = set()
+        self._services = {}
 
     async def launch_description(self, description: launch.LaunchDescription):
         """ Launch a launch description asynchronously
@@ -30,18 +32,35 @@ class AsyncLaunchManager:
         ls.include_launch_description(description)
         task = asyncio.create_task(ls.run_async())
         self.active_tasks.add(task)
-        task.add_done_callback(self.active_tasks.discard)
+        self._services[task] = ls
+
+        def cleanup(completed_task):
+            self.active_tasks.discard(completed_task)
+            self._services.pop(completed_task, None)
+
+        task.add_done_callback(cleanup)
         return task
+
+    async def shutdown_task(self, task: asyncio.Task):
+        """Shutdown a launch service before cancelling its asyncio task."""
+        service = self._services.get(task)
+        if service is not None:
+            shutdown = service.shutdown()
+            if inspect.isawaitable(shutdown):
+                await shutdown
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
     async def kill_all(self):
         """ Kill all active launch description tasks asynchronously
         """
         if not self.active_tasks:
             return
-        for task in self.active_tasks:
-            if not task.done():
-                task.cancel()
-        await asyncio.gather(*self.active_tasks, return_exceptions=True)
+        await asyncio.gather(
+            *(self.shutdown_task(task) for task in list(self.active_tasks)),
+            return_exceptions=True,
+        )
 
 
 class AsyncNode(TimeNode, rclpy.node.Node):
@@ -94,6 +113,8 @@ class AsyncNode(TimeNode, rclpy.node.Node):
         Wait for an awaitable to complete in a blocking manner
         """
         async def coro() -> T:
+            if isinstance(future, rclpy.task.Future):
+                return await self.await_ros(future)
             return await future
         return asyncio.run_coroutine_threadsafe(coro(), self.event_loop).result()
 
@@ -121,7 +142,7 @@ class AsyncNode(TimeNode, rclpy.node.Node):
             return result
         return sync_fn
 
-    async def await_ros(self, ros_future: asyncio.Future[T]) -> T:
+    async def await_ros(self, ros_future: rclpy.task.Future) -> T:
         """
         Wraps a ROS Future into an Asyncio Future so it can be awaited.
         """
@@ -208,11 +229,13 @@ class ClientWrapper(typing.Generic[ServiceT]):
         """
         if timeout_sec is None:
             timeout_sec = self._timeout
+        ros_future = self._client.call_async(request)
         res = await AsyncUtil.timeout(
-            self._client.call_async(request),
+            self._node.await_ros(ros_future),
             timeout_sec=timeout_sec
         )
         if res is None:
+            ros_future.cancel()
             self._node.get_logger().warning(f"Service call to {self._client.srv_name} timed out after {timeout_sec} seconds")
         return res
 

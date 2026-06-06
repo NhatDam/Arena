@@ -1,1 +1,1 @@
-/home/nguyenduytan/arena5_ws/build/arena_simulation_setup/worlds/hospital_1/scenarios/corridor_head_on/bt.xml
+<root main_tree_to_execute="MainTree"><BehaviorTree ID="MainTree"></BehaviorTree></root>

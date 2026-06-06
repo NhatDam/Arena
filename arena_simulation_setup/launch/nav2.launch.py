@@ -104,11 +104,15 @@ def generate_launch_description():
                 'frame': frame.substitution,
                 **task_generator_node.dict,
                 'namespace': namespace.substitution,
-                # In train_mode the RL environment publishes cmd_vel directly.
-                # Redirect the collision_monitor output to a dead topic so it
-                # never overwrites the RL agent's velocity commands.
+                # In train_mode and AI-hybrid DWB modes, avoid overwriting
+                # controller-side velocity commands on the robot cmd_vel topic.
                 'cmd_vel_out_topic': PythonExpression(
-                    ['"cmd_vel_sink" if "', train_mode.substitution, '" == "true" else "cmd_vel"']
+                    [
+                        '"cmd_vel_sink" if ("', train_mode.substitution, '" == "true" or (',
+                        '"', agent_name.substitution, '".startswith("SocialNav") or ',
+                        '"', agent_name.substitution, '".startswith("UrbanNav") or ',
+                        '"', agent_name.substitution, '".startswith("CityWalker"))) else "cmd_vel"'
+                    ]
                 ),
                 'default_nav_to_pose_bt_xml': YAMLRetrieveSubstitution(
                     YAMLFileSubstitution(

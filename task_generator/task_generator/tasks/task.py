@@ -306,6 +306,8 @@ class Task(_TaskRegistry, NodeInterface, Props_):
                 module.after_reset()
 
             self.last_reset_time = self.clock.clock.sec
+            if hasattr(self.__tm_robots, "mark_episode_started"):
+                self.__tm_robots.mark_episode_started()
             # 5. Resume goal publishing now that costmaps are clean
             self.resume_all_goal_publishing()
 
