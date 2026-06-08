@@ -111,7 +111,9 @@ def generate_launch_description():
                         '"cmd_vel_sink" if ("', train_mode.substitution, '" == "true" or (',
                         '"', agent_name.substitution, '".startswith("SocialNav") or ',
                         '"', agent_name.substitution, '".startswith("UrbanNav") or ',
-                        '"', agent_name.substitution, '".startswith("CityWalker"))) else "cmd_vel"'
+                        '"', agent_name.substitution, '".startswith("CityWalker") or ',
+                        '"', agent_name.substitution, '".startswith("LeLan") or ',
+                        '"', agent_name.substitution, '".startswith("LeLaN"))) else "cmd_vel"'
                     ]
                 ),
                 'default_nav_to_pose_bt_xml': YAMLRetrieveSubstitution(
@@ -202,7 +204,9 @@ def generate_launch_description():
         train_mode.substitution, '" == "false" and (',
         '"', agent_name.substitution, '".startswith("SocialNav") or ',
         '"', agent_name.substitution, '".startswith("UrbanNav") or ',
-        '"', agent_name.substitution, '".startswith("CityWalker"))) else "cmd_vel_nav"'
+        '"', agent_name.substitution, '".startswith("CityWalker") or ',
+        '"', agent_name.substitution, '".startswith("LeLan") or ',
+        '"', agent_name.substitution, '".startswith("LeLaN"))) else "cmd_vel_nav"'
     ])
 
     remappings = [

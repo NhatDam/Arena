@@ -168,6 +168,16 @@ def generate_launch_description():
     )
     citywalker_config_path = os.path.join(citywalker_root, 'config', 'citywalker_one.yaml')
 
+    # ---- LeLan paths ----
+    lelan_root = os.path.join(workspace_dir, 'src', 'arena-lelan')
+    lelan_controller_script = os.path.join(
+        lelan_root,
+        'ros2_nodes',
+        'lelan',
+        'lelan_dwb_node.py',
+    )
+    lelan_config_path = os.path.join(lelan_root, 'src', 'config', 'lelan.yaml')
+
     data_recorder = launch_ros.actions.Node(
         package='arena_evaluation',
         executable='record',
@@ -354,6 +364,60 @@ def generate_launch_description():
         additional_env=ai_process_env,
     )
 
+    # ---- LeLan controller ----
+    # Condition: agent_name must start with "LeLan" or "LeLaN".
+    lelan_controller = launch.actions.ExecuteProcess(
+        cmd=[
+            ai_python,
+            lelan_controller_script,
+            '--ros-args',
+            '-r',
+            PythonExpression([
+                '"__node:=lelan_dwb_controller_" + "',
+                namespace.substitution,
+                '".strip("/").replace("/", "_")'
+            ]),
+            '-p', f'model_config_path:={lelan_config_path}',
+            '-p',
+            PythonExpression(['"agent_name:=', agent_name.substitution, '"']),
+            '-p', 'control_frequency:=10.0',
+            '-p', 'max_linear_velocity:=0.5',
+            '-p', 'max_angular_velocity:=1.0',
+            '-p', 'allow_pure_pursuit_fallback:=false',
+            '-p', 'controller_completion_enabled:=false',
+            '-p', PythonExpression(['"goal_completion_radius:=', goal_tolerance_radius.substitution, '"']),
+            '-p',
+            PythonExpression(['"robot_namespace:=', namespace.substitution, '"']),
+            '-p',
+            PythonExpression(['"image_topic:=', namespace.substitution, '/rgbd_camera/image"']),
+            '-p',
+            PythonExpression(['"goal_topic:=', namespace.substitution, '/goal_pose"']),
+            '-p',
+            PythonExpression(['"goal_topic_secondary:=', namespace.substitution, '/goal_pose"']),
+            '-p',
+            PythonExpression(['"evaluation_topic:=', namespace.substitution, '/evaluation"']),
+            '-p',
+            PythonExpression(['"cmd_vel_topic:=', namespace.substitution, '/cmd_vel"']),
+            '-p', 'instruction_topic:=/nav_instruction',
+            '-p', 'coordinate_mode:=xz_to_ros',
+            '-p', 'gate_waypoint_index:=3',
+            '-p', 'waypoint_gate_radius:=0.25',
+            '-p', 'regeneration_max_attempts:=3',
+            '-p', 'regeneration_min_wp4_delta:=0.20',
+            '-p', 'dwb_score_weight:=0.1',
+        ],
+        output='screen',
+        condition=IfCondition(
+            PythonExpression([
+                '("', agent_name.substitution, '".startswith("LeLan") or "',
+                agent_name.substitution, '".startswith("LeLaN")) and "',
+                local_planner.substitution, '" == "dwb" and "',
+                train_mode.substitution, '" == "false"'
+            ])
+        ),
+        additional_env=ai_process_env,
+    )
+
     # ---- Pure DWB Baseline Controller (khi không dùng AI) ----
     # pure_dwb_controller = launch_ros.actions.Node(
     #     package='nav2_controller',
@@ -399,7 +463,8 @@ def generate_launch_description():
         socialnav_bridge,
         socialnav_controller,
         urbannav_controller,
-        citywalker_controller,   
+        citywalker_controller,
+        lelan_controller,
         # pure_dwb_controller,
         data_recorder,
     ])
