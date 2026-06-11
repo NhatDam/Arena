@@ -249,6 +249,7 @@ def generate_launch_description():
             ai_python, socialnav_controller_script,
             '--ros-args',
             '-r', PythonExpression(['"__node:=socialnav_dwb_controller_" + "', namespace.substitution, '".strip("/").replace("/", "_")']),
+            '-p', PythonExpression(['"use_sim_time:=', use_sim_time.substitution, '"']),
             '-p', f'model_config_path:={socialnav_config_path}',
             '-p', PythonExpression(['"agent_name:=', agent_name.substitution, '"']),
             '-p', 'history_length:=8',
