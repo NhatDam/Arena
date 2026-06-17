@@ -145,6 +145,9 @@ def generate_launch_description():
         'PYTHONUNBUFFERED': '1',
         'RCUTILS_LOGGING_BUFFERED_STREAM': '0',
     }
+    ai_cuda_visible_devices = os.environ.get('AI_CUDA_VISIBLE_DEVICES', '').strip()
+    if ai_cuda_visible_devices:
+        ai_process_env['CUDA_VISIBLE_DEVICES'] = ai_cuda_visible_devices
     ai_python_no_user_site = os.environ.get('SOCIALNAV_AI_PYTHONNOUSERSITE', '1')
     if ai_python_no_user_site:
         ai_process_env['PYTHONNOUSERSITE'] = ai_python_no_user_site
@@ -299,6 +302,7 @@ def generate_launch_description():
                 namespace.substitution,
                 '".strip("/").replace("/", "_")'
             ]),
+            '-p', PythonExpression(['"use_sim_time:=', use_sim_time.substitution, '"']),
             '-p',
             f'model_config_path:={urbannav_config_path}',
             '-p',
@@ -378,6 +382,7 @@ def generate_launch_description():
                 namespace.substitution,
                 '".strip("/").replace("/", "_")'
             ]),
+            '-p', PythonExpression(['"use_sim_time:=', use_sim_time.substitution, '"']),
             '-p', f'model_config_path:={lelan_config_path}',
             '-p',
             PythonExpression(['"agent_name:=', agent_name.substitution, '"']),

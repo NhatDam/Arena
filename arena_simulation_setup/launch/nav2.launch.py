@@ -1,6 +1,6 @@
 import os
 
-from arena_bringup.future import PythonExpression
+from arena_bringup.future import IfElseSubstitution, PythonExpression
 from arena_bringup.substitutions import (LaunchArgument, YAMLFileSubstitution,
                                          YAMLMergeSubstitution,
                                          YAMLReplaceSubstitution,
@@ -38,6 +38,25 @@ def generate_launch_description():
     amcl = LaunchArgument('amcl')
     agent_name = LaunchArgument('agent_name', default_value='')
     train_mode = LaunchArgument('train_mode', default_value='false')
+
+    ai_dwb_agent = PythonExpression([
+        '("', agent_name.substitution, '".strip().startswith("SocialNav") or ',
+        '"', agent_name.substitution, '".strip().startswith("UrbanNav") or ',
+        '"', agent_name.substitution, '".strip().startswith("CityWalker") or ',
+        '"', agent_name.substitution, '".strip().startswith("LeLan") or ',
+        '"', agent_name.substitution, '".strip().startswith("LeLaN"))'
+    ])
+    ai_hybrid_dwb = PythonExpression([
+        '("', local_planner.substitution, '".strip().lower() == "dwb" and ',
+        '"', train_mode.substitution, '".strip().lower() in ("false", "0", "no", "") and ',
+        ai_dwb_agent,
+        ')'
+    ])
+    suppress_nav_cmd_vel = PythonExpression([
+        '("', train_mode.substitution, '".strip().lower() in ("true", "1", "yes") or ',
+        ai_hybrid_dwb,
+        ')'
+    ])
 
     substitutions = YAMLMergeSubstitution(
         YAMLFileSubstitution(
@@ -106,15 +125,10 @@ def generate_launch_description():
                 'namespace': namespace.substitution,
                 # In train_mode and AI-hybrid DWB modes, avoid overwriting
                 # controller-side velocity commands on the robot cmd_vel topic.
-                'cmd_vel_out_topic': PythonExpression(
-                    [
-                        '"cmd_vel_sink" if ("', train_mode.substitution, '" == "true" or (',
-                        '"', agent_name.substitution, '".startswith("SocialNav") or ',
-                        '"', agent_name.substitution, '".startswith("UrbanNav") or ',
-                        '"', agent_name.substitution, '".startswith("CityWalker") or ',
-                        '"', agent_name.substitution, '".startswith("LeLan") or ',
-                        '"', agent_name.substitution, '".startswith("LeLaN"))) else "cmd_vel"'
-                    ]
+                'cmd_vel_out_topic': IfElseSubstitution(
+                    suppress_nav_cmd_vel,
+                    'cmd_vel_sink',
+                    'cmd_vel',
                 ),
                 'default_nav_to_pose_bt_xml': YAMLRetrieveSubstitution(
                     YAMLFileSubstitution(
@@ -199,15 +213,11 @@ def generate_launch_description():
         ]),
     )
 
-    controller_cmd_topic = PythonExpression([
-        '"cmd_vel_nav_raw" if ("', local_planner.substitution, '" == "dwb" and "',
-        train_mode.substitution, '" == "false" and (',
-        '"', agent_name.substitution, '".startswith("SocialNav") or ',
-        '"', agent_name.substitution, '".startswith("UrbanNav") or ',
-        '"', agent_name.substitution, '".startswith("CityWalker") or ',
-        '"', agent_name.substitution, '".startswith("LeLan") or ',
-        '"', agent_name.substitution, '".startswith("LeLaN"))) else "cmd_vel_nav"'
-    ])
+    controller_cmd_topic = IfElseSubstitution(
+        ai_hybrid_dwb,
+        'cmd_vel_nav_raw',
+        'cmd_vel_nav',
+    )
 
     remappings = [
         ('map_server', '/map_server'),

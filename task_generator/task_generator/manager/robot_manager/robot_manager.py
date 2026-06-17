@@ -128,6 +128,10 @@ class RobotManager(NodeInterface):
         self._goal_publishing_suspended = False
         self._launch_tasks: list[asyncio.Task] = []
         self._nav_stack_ready: bool = False
+        self._nav_action_client = None
+        self._nav_goal_handle = None
+        self._nav_goal_result_task: typing.Optional[asyncio.Task] = None
+        self._nav_goal_sequence = 0
         self._last_dwb_cmd_log_time = 0.0
         self._last_dwb_odom_log_time = 0.0
         self._last_dwb_joint_log_time = 0.0
@@ -209,10 +213,15 @@ class RobotManager(NodeInterface):
         namespace = str(self.namespace)
         namespace_token = f"__ns:={namespace}"
         compact_namespace = namespace.strip("/").replace("/", "_")
+        # patterns = [
+        #     namespace_token,
+        #     rf"(controller_server|planner_server|bt_navigator|behavior_server|waypoint_follower|velocity_smoother|collision_monitor|smoother_server).*{namespace}",
+        #     rf"(socialnav|urbannav|citywalker|human_states_bridge).*{compact_namespace}",
+        # ]
         patterns = [
             namespace_token,
-            rf"(controller_server|planner_server|bt_navigator|behavior_server|waypoint_follower|velocity_smoother|collision_monitor|smoother_server).*{namespace}",
-            rf"(socialnav|urbannav|citywalker|human_states_bridge).*{compact_namespace}",
+            rf"(controller_server|planner_server|bt_navigator|behavior_server|waypoint_follower|velocity_smoother|collision_monitor|smoother_server|map_server|lifecycle_manager).*{namespace}",
+            rf"(socialnav|urbannav|citywalker|human_states_bridge|map_server).*{compact_namespace}",
         ]
 
         self._logger.warn(f"[Nav Stack] Terminating stale processes for {namespace}")
@@ -279,16 +288,20 @@ class RobotManager(NodeInterface):
         """
         await self._do_launch(
             launch.LaunchDescription([
+
+                # launch_ros.actions.Node(
+                #     package="tf2_ros",
+                #     executable="static_transform_publisher",
+                #     name="odom_to_baseframe_publisher",
+                #     arguments=["0", "0", "0", "0", "0", "0", "1", "odom", "base_link"],
+                #     parameters=[{'use_sim_time': True}],
+                # ),
+
                 launch_ros.actions.Node(
                     package="tf2_ros",
                     executable="static_transform_publisher",
-                    name="odom_to_baseframe_publisher",
-                    arguments=[
-                        "0", "0", "0",
-                        "0", "0", "0", "1",
-                        self.frame(self._config.model_params.odom_frame),
-                        self.frame(self._config.model_params.base_frame),
-                    ],
+                    name="map_to_odom_publisher",
+                    arguments=["0", "0", "0", "0", "0", "0", "1", "map", "odom"],
                     parameters=[{'use_sim_time': True}],
                 )
             ])
@@ -314,15 +327,15 @@ class RobotManager(NodeInterface):
             goal_qos,
         )
 
-        # --- KHỞI TẠO ACTION CLIENT CHO NAV2 ---
-        # action_topic = f"/{str(self.namespace).strip('/')}/navigate_to_pose"
-        # self._nav_action_client = ActionClient(
-        #     self.node,
-        #     NavigateToPose,
-        #     action_topic
-        # )
-        # self.node.get_logger().warn(f"🔗 [ROBOT MANAGER] Action Client ready at: {action_topic}")
-        # ---------------------------------------
+        action_topic = f"/{str(self.namespace).strip('/')}/navigate_to_pose"
+        self._nav_action_client = ActionClient(
+            self.node,
+            NavigateToPose,
+            action_topic,
+        )
+        self.node.get_logger().info(
+            f"[RobotManager] Nav2 action client ready at: {action_topic}"
+        )
 
         self.node.create_subscription(
             nav_msgs.Odometry,
@@ -357,7 +370,7 @@ class RobotManager(NodeInterface):
         # dynamically from the prim world pose.  The static identity transform
         # conflicts with it (TF2 static buffer wins) and breaks the costmap
         # after teleport because it pins base_link at (0,0,0) in odom frame.
-        #await self._odom_base_transform()
+        await self._odom_base_transform()
 
         self._robot_radius = self.node.rosparam[float].get(
             'robot_radius',
@@ -522,6 +535,7 @@ class RobotManager(NodeInterface):
         if self._publish_goal_task is not None:
             self._publish_goal_task.cancel()
             self._publish_goal_task = None
+        self._cancel_nav_goal_result_task()
         self._goal_publishing_suspended = True
 
     def resume_goal_publishing(self):
@@ -616,6 +630,8 @@ class RobotManager(NodeInterface):
             self._goal_pos = self._environment_manager.realize(goal_pos)
             self._is_goal_reached = False  # reset so the new goal is actually navigated
             self._goal_active = False
+            self._nav_goal_handle = None
+            self._cancel_nav_goal_result_task()
             if self._publish_goal_task is not None:
                 self._publish_goal_task.cancel()
             self._publish_goal_task = None
@@ -629,8 +645,175 @@ class RobotManager(NodeInterface):
                 )
         return self._pose, self._goal_pos
 
+    def _cancel_nav_goal_result_task(self):
+        if self._nav_goal_result_task is not None:
+            self._nav_goal_result_task.cancel()
+            self._nav_goal_result_task = None
+
+    @staticmethod
+    def _goal_status_name(status: int) -> str:
+        status_names = {
+            action_msgs.msg.GoalStatus.STATUS_UNKNOWN: "UNKNOWN",
+            action_msgs.msg.GoalStatus.STATUS_ACCEPTED: "ACCEPTED",
+            action_msgs.msg.GoalStatus.STATUS_EXECUTING: "EXECUTING",
+            action_msgs.msg.GoalStatus.STATUS_CANCELING: "CANCELING",
+            action_msgs.msg.GoalStatus.STATUS_SUCCEEDED: "SUCCEEDED",
+            action_msgs.msg.GoalStatus.STATUS_CANCELED: "CANCELED",
+            action_msgs.msg.GoalStatus.STATUS_ABORTED: "ABORTED",
+        }
+        return status_names.get(status, f"STATUS_{status}")
+
+    async def _wait_for_nav_action_server(
+        self,
+        action_topic: str,
+        *,
+        timeout: float,
+    ) -> bool:
+        if self._nav_action_client is None:
+            self._logger.error(
+                f"[Goal Publishing] Nav2 action client is not initialized for {action_topic}"
+            )
+            return False
+
+        deadline = asyncio.get_running_loop().time() + timeout
+        while not self._nav_action_client.server_is_ready():
+            if asyncio.get_running_loop().time() >= deadline:
+                self._logger.error(
+                    f"[Goal Publishing] Nav2 action server {action_topic} "
+                    f"not ready after {timeout:.1f}s"
+                )
+                return False
+            await asyncio.sleep(0.25)
+
+        return True
+
+    async def _monitor_nav_goal_result(
+        self,
+        goal_handle,
+        goal_sequence: int,
+        action_topic: str,
+    ):
+        try:
+            result_response = await self.node.await_ros(goal_handle.get_result_async())
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            if goal_sequence == self._nav_goal_sequence:
+                self._logger.error(
+                    f"[Goal Publishing] Nav2 goal result failed on {action_topic}: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                self._goal_active = False
+            return
+
+        if goal_sequence != self._nav_goal_sequence:
+            self._logger.debug(
+                f"[Goal Publishing] Ignoring stale Nav2 result for {action_topic}"
+            )
+            return
+
+        status = result_response.status
+        status_name = self._goal_status_name(status)
+        self._goal_active = False
+        self._nav_goal_result_task = None
+
+        if status == action_msgs.msg.GoalStatus.STATUS_SUCCEEDED:
+            self._is_goal_reached = True
+            self._logger.info(
+                f"[Goal Publishing] Nav2 goal succeeded on {action_topic}"
+            )
+            return
+
+        self._is_goal_reached = False
+        self._logger.error(
+            f"[Goal Publishing] Nav2 goal finished without success on "
+            f"{action_topic}: {status_name}({status})"
+        )
+
+    async def _send_goal_to_nav2_action(
+        self,
+        target_pose: geometry_msgs.msg.PoseStamped,
+    ) -> bool:
+        action_topic = f"/{str(self.namespace).strip('/')}/navigate_to_pose"
+        server_timeout = float(
+            os.environ.get("ARENA_NAV2_ACTION_SERVER_TIMEOUT_SEC", "30")
+        )
+        if not await self._wait_for_nav_action_server(
+            action_topic,
+            timeout=server_timeout,
+        ):
+            return False
+
+        action_client = self._nav_action_client
+        if action_client is None:
+            self._logger.error(
+                f"[Goal Publishing] Nav2 action client disappeared for {action_topic}"
+            )
+            return False
+
+        goal_msg = NavigateToPose.Goal()
+        goal_msg.pose = target_pose
+        goal_msg.behavior_tree = ""
+
+        self._nav_goal_sequence += 1
+        goal_sequence = self._nav_goal_sequence
+        self._cancel_nav_goal_result_task()
+
+        accept_timeout = float(
+            os.environ.get("ARENA_NAV2_GOAL_ACCEPT_TIMEOUT_SEC", "10")
+        )
+        goal_future = None
+
+        try:
+            goal_future = action_client.send_goal_async(goal_msg)
+            goal_handle = await asyncio.wait_for(
+                self.node.await_ros(goal_future),
+                timeout=accept_timeout,
+            )
+        except asyncio.TimeoutError:
+            if goal_future is not None:
+                goal_future.cancel()
+            self._logger.error(
+                f"[Goal Publishing] Nav2 did not acknowledge goal on "
+                f"{action_topic} after {accept_timeout:.1f}s"
+            )
+            return False
+        except Exception as exc:
+            self._logger.error(
+                f"[Goal Publishing] Failed to send Nav2 goal on {action_topic}: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            return False
+
+        if goal_handle is None:
+            self._logger.error(
+                f"[Goal Publishing] Nav2 goal send returned no handle on {action_topic}"
+            )
+            return False
+
+        if not goal_handle.accepted:
+            self._logger.error(
+                f"[Goal Publishing] Nav2 rejected goal on {action_topic}"
+            )
+            return False
+
+        self._nav_goal_handle = goal_handle
+        self._goal_active = True
+        self._goal_start_time = self.node.get_clock().now()
+        self._nav_goal_result_task = asyncio.create_task(
+            self._monitor_nav_goal_result(
+                goal_handle,
+                goal_sequence,
+                action_topic,
+            )
+        )
+        self._logger.warn(
+            f"[Goal Publishing] Nav2 goal accepted on {action_topic}"
+        )
+        return True
+
     async def _publish_goal_loop(self):
-        """Publish goal via Topic AND trigger Nav2 Action via OS Subprocess."""
+        """Publish goal via topic and send the same goal through Nav2 ActionClient."""
         
         self.node.get_logger().warn("🟢 [DEBUG] Waiting 1.5s for Isaac Sim TF & Costmap...")
         await asyncio.sleep(1.5) 
@@ -675,37 +858,13 @@ class RobotManager(NodeInterface):
         target_pose.pose = goal.to_msg()
         self._goal_pub.publish(target_pose)
 
-        # Send the same map-framed goal to Nav2 via CLI to avoid the previous
-        # action-client deadlock in this benchmark harness.
-        action_topic = f"/{str(self.namespace).strip('/')}/navigate_to_pose"
-        goal_x = float(goal.position.x)
-        goal_y = float(goal.position.y)
-        goal_orientation = target_pose.pose.orientation
-
-        goal_yaml = (
-            "{pose: {header: {frame_id: 'map', stamp: {sec: 0, nanosec: 0}}, "
-            "pose: {position: {x: %.6f, y: %.6f, z: 0.0}, "
-            "orientation: {x: %.6f, y: %.6f, z: %.6f, w: %.6f}}}}"
-            % (
-                goal_x,
-                goal_y,
-                goal_orientation.x,
-                goal_orientation.y,
-                goal_orientation.z,
-                goal_orientation.w,
+        goal_sent = await self._send_goal_to_nav2_action(target_pose)
+        if not goal_sent:
+            self._goal_active = False
+            self._logger.error(
+                "[Goal Publishing] Nav2 goal was not sent/accepted; "
+                "robot will not receive DWB commands for this goal."
             )
-        )
-        cmd = (
-            f'ros2 action send_goal {action_topic} nav2_msgs/action/NavigateToPose '
-            f'"{goal_yaml}" > /dev/null 2>&1 &'
-        )
-
-        # Thực thi lệnh ngầm trong background
-        os.system(cmd)
-        self.node.get_logger().warn("✅ [ROBOT MANAGER] Action Goal SENT via OS Background Process!")
-
-        self._goal_active = True
-        self._goal_start_time = self.node.get_clock().now()
         
 
     async def _launch_robot(self, node_paths: set[str]):
@@ -1024,5 +1183,9 @@ class RobotManager(NodeInterface):
         if self._goal_timer is not None:
             self._goal_timer.cancel()
             self._goal_timer.destroy()
+        self._cancel_nav_goal_result_task()
+        if self._nav_action_client is not None:
+            self._nav_action_client.destroy()
+            self._nav_action_client = None
         await self._shutdown_launch_tasks()
         await self._environment_manager.remove_robot((self.robot,))

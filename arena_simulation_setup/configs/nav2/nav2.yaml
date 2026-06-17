@@ -271,7 +271,8 @@ collision_monitor:
     odom_frame_id: ${frame:-}${robot_odom_frame:-odom}
 
     # 2) Velocity topics
-    # Full chain: controller_server → "cmd_vel_nav" → velocity_smoother → "cmd_vel_smoothed" → collision_monitor → "cmd_vel"
+    # Baseline DWB: controller_server -> "cmd_vel_nav" -> velocity_smoother -> "cmd_vel".
+    # AI-hybrid DWB: controller_server -> "cmd_vel_nav_raw" -> AI adapter -> "cmd_vel".
     cmd_vel_in_topic:  "cmd_vel_smoothed"
     cmd_vel_out_topic: "${cmd_vel_out_topic:-cmd_vel}"
 

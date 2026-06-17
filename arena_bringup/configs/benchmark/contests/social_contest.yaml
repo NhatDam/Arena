@@ -1,12 +1,25 @@
 contestants:
 
   # ---- SocialNav ----
-  # agent_name phải trùng basename checkpoint trong src/arena-social-nav/ckpt
   - name: SocialNav_1_path
     local_planner: dwb
     inter_planner: navigate_w_replanning_time
     agent_name: SocialNav_1_path
     goal_tolerance_radius: 2.5
+
+  # # ---- Urban Navigation (UrbanNav FiLM) ----
+  # - name: UrbanNav-FiLM
+  #   local_planner: dwb
+  #   inter_planner: navigate_w_replanning_time
+  #   agent_name: UrbanNav_FiLM
+  #   goal_tolerance_radius: 2.5
+
+  # # ---- LeLan ----
+  # - name: LeLan-v1
+  #   local_planner: dwb
+  #   inter_planner: navigate_w_replanning_time
+  #   agent_name: LeLan_latest
+  #   goal_tolerance_radius: 2.5
 
   # # ---- Baseline DWB (non-AI) ----
   # - name: DWB-Baseline
@@ -15,26 +28,9 @@ contestants:
   #   agent_name: ""
   #   goal_tolerance_radius: 2.5
 
-  # ---- Urban Navigation (UrbanNav FiLM) ----
-  # agent_name phải bắt đầu bằng "UrbanNav" và trùng basename checkpoint
-  # - name: UrbanNav-FiLM
-  #   local_planner: dwb
-  #   inter_planner: navigate_w_replanning_time
-  #   agent_name: UrbanNav_FiLM
-  #   goal_tolerance_radius: 2.5
-
-  # ---- CityWalker ----
-  # agent_name nên bắt đầu bằng "CityWalker"; phần sau prefix là basename checkpoint
-  # - name: CityWalker-v1
-  #   local_planner: dwb
-  #   inter_planner: navigate_w_replanning_time
-  #   agent_name: CityWalker_last-v2
-  #   goal_tolerance_radius: 2.5
-
-  # ---- LeLan ----
-  # agent_name nên bắt đầu bằng "LeLan"; phần sau prefix là basename checkpoint
-  # - name: LeLan-v1
-  #   local_planner: dwb
-  #   inter_planner: navigate_w_replanning_time
-  #   agent_name: LeLan_latest
-  #   goal_tolerance_radius: 2.5
+  # # ---- CityWalker ----
+  # # - name: CityWalker-v1
+  # #   local_planner: dwb
+  # #   inter_planner: navigate_w_replanning_time
+  # #   agent_name: CityWalker_last-v2
+  # #   goal_tolerance_radius: 2.5

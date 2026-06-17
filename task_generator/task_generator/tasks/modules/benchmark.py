@@ -24,6 +24,10 @@ from task_generator.tasks.modules import TM_Module
 
 
 def _resolve_benchmark_dir() -> pathlib.Path:
+    override_dir = os.environ.get("ARENA_BENCHMARK_CONFIG_DIR", "").strip()
+    if override_dir:
+        return pathlib.Path(override_dir).expanduser().resolve()
+
     workspace_dir = pathlib.Path(
         os.environ.get("WORKSPACE_DIR", os.path.expanduser("~/arena5_ws"))
     ).resolve()
@@ -295,6 +299,8 @@ class Mod_Benchmark(TM_Module):
     _contest_index: Contest.Index
     _suite_index: Suite.Index
     _headless: int
+    _episode_offset: int
+    _episode_total_override: typing.Optional[int]
     _config_class: typing.Any
     _primary_node: str
     _record_data_root: str
@@ -471,7 +477,11 @@ class Mod_Benchmark(TM_Module):
         self.needs_reincarnation: bool = True
         self._hunav_recording: bool = False
 
-        self._runid = f"t{int(time.time())}"
+        requested_runid = os.environ.get("ARENA_BENCHMARK_RUN_ID", "").strip()
+        if requested_runid:
+            self._runid = requested_runid if requested_runid.startswith("t") else f"t{requested_runid}"
+        else:
+            self._runid = f"t{int(time.time())}"
         # Log detected task_generator_nodes
         self._primary_node = self.node.service_namespace()
 
@@ -480,6 +490,9 @@ class Mod_Benchmark(TM_Module):
         self._suite = self._load_suite(suite=self._config.suite.config, config_class=self.node.conf)
         self._contest = self._load_contest(self._config.contest.config)
         self._episode_index = -1
+        self._episode_offset = int(os.environ.get("ARENA_BENCHMARK_EPISODE_OFFSET", "0") or 0)
+        episode_total = os.environ.get("ARENA_BENCHMARK_EPISODE_TOTAL", "").strip()
+        self._episode_total_override = int(episode_total) if episode_total else None
         self._contest_index = self._contest.min_index
         self._suite_index = Suite.Index(self._suite.min_index - 1)
         self._headless = 1
@@ -503,6 +516,8 @@ class Mod_Benchmark(TM_Module):
             f.write(f"run {self._runid}\n")
             f.write(f"contest {self._contest.name}\n")
             f.write(f"suite {self._suite.name}\n")
+            f.write(f"config_dir {self.DIR}\n")
+            f.write(f"episode_offset {self._episode_offset}\n")
 
         self._log_contest()
         # suite_index starts at -1; first before_reset() will advance to 0
@@ -541,7 +556,8 @@ class Mod_Benchmark(TM_Module):
         contest_cfg = self._contest.config(self._contest_index)
         suite_cfg = self._suite.config(self._suite_index)
 
-        experiment_tag = f"{contest_cfg.name}__{suite_cfg.name}__ep{self._episode_index}"
+        external_episode_index = self._episode_offset + self._episode_index
+        experiment_tag = f"{contest_cfg.name}__{suite_cfg.name}__ep{external_episode_index}"
 
         # Try to get the robot goal from the first robot manager
         robot_goal = PoseStamped()
@@ -723,7 +739,9 @@ class Mod_Benchmark(TM_Module):
         if self._episode_index < 0:
             return
         episode_limit = int(self._suite.config(self._suite_index).episodes * self._config.suite.scale_episodes)
-        self._logger.info(f"E [{1+self._episode_index}/{episode_limit}]")
+        episode_display = self._episode_offset + self._episode_index
+        episode_total = self._episode_total_override or (self._episode_offset + episode_limit)
+        self._logger.info(f"E [{1+episode_display}/{episode_total}]")
 
     def _verify_all_nav_stacks_ready(self) -> bool:
         """
