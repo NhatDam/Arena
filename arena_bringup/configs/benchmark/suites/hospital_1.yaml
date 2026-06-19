@@ -9,16 +9,16 @@ stages:
 #   tm_obstacles: scenario
 #   tm_robots: scenario
 #   timeout: 180
-- config:
-    SCENARIO:
-      file: default_03
-  episodes: 2
-  map: hospital_1
-  robot: turtlebot
-  name: hospital_1_default_03_turtlebot
-  tm_obstacles: scenario
-  tm_robots: scenario
-  timeout: 180
+# - config:
+#     SCENARIO:
+#       file: default_03
+#   episodes: 2
+#   map: hospital_1
+#   robot: turtlebot
+#   name: hospital_1_default_03_turtlebot
+#   tm_obstacles: scenario
+#   tm_robots: scenario
+#   timeout: 180
 # - config:
 #     SCENARIO:
 #       file: default_05
@@ -39,14 +39,14 @@ stages:
 #   tm_obstacles: scenario
 #   tm_robots: scenario
 #   timeout: 180
-# - config:
-#     SCENARIO:
-#       file: default_01
-#   episodes: 10
-#   map: hospital_1
-#   robot: turtlebot
-#   name: hospital_1_default_01_turtlebot
-#   tm_obstacles: scenario
-#   tm_robots: scenario
-#   timeout: 180
+- config:
+    SCENARIO:
+      file: default_01
+  episodes: 2
+  map: hospital_1
+  robot: turtlebot
+  name: hospital_1_default_01_turtlebot
+  tm_obstacles: scenario
+  tm_robots: scenario
+  timeout: 240
 

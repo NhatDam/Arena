@@ -223,7 +223,7 @@ def generate_launch_description():
         ),
     )
 
-    # ---- SocialNav bridge (human detection) ----
+    # ---- Social AI bridge (human detection) ----
     socialnav_bridge = launch.actions.ExecuteProcess(
         cmd=[
             'python3',
@@ -239,7 +239,10 @@ def generate_launch_description():
         output='screen',
         condition=IfCondition(
             PythonExpression([
-                '"', agent_name.substitution, '".startswith("SocialNav") and "',
+                '("', agent_name.substitution, '".startswith("SocialNav") or "',
+                agent_name.substitution, '".startswith("UrbanNav") or "',
+                agent_name.substitution, '".startswith("LeLan") or "',
+                agent_name.substitution, '".startswith("LeLaN")) and "',
                 local_planner.substitution, '" == "dwb" and "',
                 train_mode.substitution, '" == "false"'
             ])
