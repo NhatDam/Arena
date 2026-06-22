@@ -9,5 +9,3 @@
     enable_bev_visualization: false
     enable_human_tracking: true
     human_context_radius: 10.0
-    model_config_path: /home/nguyenduytan/arena5_ws/src/social-nav/configs/socialnav_film.yaml
-    model_checkpoint_path: /home/nguyenduytan/arena5_ws/src/social-nav/ckpt/SocialNav_margin.pth

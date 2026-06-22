@@ -122,23 +122,6 @@ def generate_launch_description():
         'socialnav',
         'human_states_bridge.py',
     )
-    socialnav_controller_script = os.path.join(
-        social_nav_root,
-        'ros2_nodes',
-        'socialnav',
-        'socialnav_dwb_node.py',
-    )
-    urbannav_controller_script = os.path.join(
-        social_nav_root,
-        'ros2_nodes',
-        'urbannav',
-        'urbannav_dwb_node.py',
-    )
-    socialnav_config_path = os.path.join(social_nav_root, 'configs', 'socialnav_film.yaml')
-    urbannav_config_path = os.path.join(social_nav_root, 'configs', 'urbannav_film.yaml')
-
-    socialnav_ckpt_path = os.path.join(social_nav_root, 'ckpt', 'SocialNav_margin.pth')
-    urbannav_ckpt_path = os.path.join(social_nav_root, 'ckpt', 'UrbanNav_FiLM.pth')
 
     ai_python = os.environ.get('SOCIALNAV_AI_PYTHON', 'python3')
     ai_process_env = {
@@ -170,16 +153,6 @@ def generate_launch_description():
         'citywalker_dwb_node.py',
     )
     citywalker_config_path = os.path.join(citywalker_root, 'config', 'citywalker_one.yaml')
-
-    # ---- LeLan paths ----
-    lelan_root = os.path.join(workspace_dir, 'src', 'arena-lelan')
-    lelan_controller_script = os.path.join(
-        lelan_root,
-        'ros2_nodes',
-        'lelan',
-        'lelan_dwb_node.py',
-    )
-    lelan_config_path = os.path.join(lelan_root, 'src', 'config', 'lelan.yaml')
 
     data_recorder = launch_ros.actions.Node(
         package='arena_evaluation',
@@ -249,22 +222,49 @@ def generate_launch_description():
         ),
     )
 
-    # ---- SocialNav controller ----
-    socialnav_controller = launch.actions.ExecuteProcess(
+    # ---- Unified AI + DWB FollowPath adapter ----
+    ai_controller = launch.actions.ExecuteProcess(
         cmd=[
-            ai_python, socialnav_controller_script,
+            ai_python,
+            '-m',
+            'arena_ai_integration.nodes.ai_controller_node',
             '--ros-args',
-            '-r', PythonExpression(['"__node:=socialnav_dwb_controller_" + "', namespace.substitution, '".strip("/").replace("/", "_")']),
+            '-r',
+            PythonExpression([
+                '"__node:=ai_controller_" + "',
+                namespace.substitution,
+                '".strip("/").replace("/", "_")'
+            ]),
             '-p', PythonExpression(['"use_sim_time:=', use_sim_time.substitution, '"']),
-            '-p', f'model_config_path:={socialnav_config_path}',
+            '-p',
+            PythonExpression([
+                '"agent_type:=socialnav" if "',
+                agent_name.substitution,
+                '".startswith("SocialNav") else "agent_type:=urbannav" if "',
+                agent_name.substitution,
+                '".startswith("UrbanNav") else "agent_type:=lelan"'
+            ]),
             '-p', PythonExpression(['"agent_name:=', agent_name.substitution, '"']),
             '-p', 'history_length:=8',
             '-p', 'control_frequency:=10.0',
             '-p', 'look_ahead_distance:=0.5',
-            '-p', 'max_linear_velocity:=1.0',
-            '-p', 'max_angular_velocity:=1.5',
+            '-p',
+            PythonExpression([
+                '"max_linear_velocity:=0.5" if ("',
+                agent_name.substitution,
+                '".startswith("LeLan") or "',
+                agent_name.substitution,
+                '".startswith("LeLaN")) else "max_linear_velocity:=1.0"'
+            ]),
+            '-p',
+            PythonExpression([
+                '"max_angular_velocity:=1.0" if ("',
+                agent_name.substitution,
+                '".startswith("LeLan") or "',
+                agent_name.substitution,
+                '".startswith("LeLaN")) else "max_angular_velocity:=1.5"'
+            ]),
             '-p', 'fallback_to_dwb:=true',
-            '-p', 'allow_pure_pursuit_fallback:=false',
             '-p', 'reset_on_eval_dropout:=false',
             '-p', 'initial_eval_wait_sec:=5.0',
             '-p', 'max_eval_staleness_sec:=5.0',
@@ -275,57 +275,26 @@ def generate_launch_description():
             '-p', PythonExpression(['"arrival_threshold:=', goal_tolerance_radius.substitution, '"']),
             '-p', 'use_arrival_completion:=false',
             '-p', PythonExpression(['"goal_completion_radius:=', goal_tolerance_radius.substitution, '"']),
-            '-p', 'enable_human_tracking:=true',
+            '-p',
+            PythonExpression([
+                '"enable_human_tracking:=true" if "',
+                agent_name.substitution,
+                '".startswith("SocialNav") else "enable_human_tracking:=false"'
+            ]),
             '-p', 'max_humans:=10',
             '-p', PythonExpression(['"robot_namespace:=', namespace.substitution, '"']),
             '-p', PythonExpression(['"image_topic:=', namespace.substitution, '/rgbd_camera/image"']),
             '-p', PythonExpression(['"dwb_cmd_topic:=', namespace.substitution, '/cmd_vel_nav_raw"']),
             '-p', 'instruction_topic:=/nav_instruction',
+            '-p', 'coordinate_mode:=xz_to_ros',
         ],
         output='screen',
         condition=IfCondition(
             PythonExpression([
-                '"', agent_name.substitution, '".startswith("SocialNav") and "',
-                local_planner.substitution, '" == "dwb" and "',
-                train_mode.substitution, '" == "false"'
-            ])
-        ),
-        additional_env=ai_process_env,
-    )
-
-    # ---- UrbanNav controller ----
-    urbannav_controller = launch.actions.ExecuteProcess(
-        cmd=[
-            ai_python,
-            urbannav_controller_script,
-            '--ros-args',
-            '-r',
-            PythonExpression([
-                '"__node:=urbannav_dwb_controller_" + "',
-                namespace.substitution,
-                '".strip("/").replace("/", "_")'
-            ]),
-            '-p', PythonExpression(['"use_sim_time:=', use_sim_time.substitution, '"']),
-            '-p',
-            f'model_config_path:={urbannav_config_path}',
-            '-p',
-            PythonExpression(['"agent_name:=', agent_name.substitution, '"']),
-            '-p', 'history_length:=8',
-            '-p', 'control_frequency:=10.0',
-            '-p', 'look_ahead_distance:=0.5',
-            '-p', 'max_linear_velocity:=1.0',
-            '-p', 'max_angular_velocity:=1.5',
-            '-p', PythonExpression(['"arrival_threshold:=', goal_tolerance_radius.substitution, '"']),
-            '-p', 'use_arrival_completion:=false',
-            '-p', PythonExpression(['"goal_completion_radius:=', goal_tolerance_radius.substitution, '"']),
-            '-p',
-            PythonExpression(['"robot_namespace:=', namespace.substitution, '"']),
-            '-p', 'instruction_topic:=/nav_instruction',
-        ],
-        output='screen',
-        condition=IfCondition(
-            PythonExpression([
-                '"', agent_name.substitution, '".startswith("UrbanNav") and "',
+                '("', agent_name.substitution, '".startswith("SocialNav") or "',
+                agent_name.substitution, '".startswith("UrbanNav") or "',
+                agent_name.substitution, '".startswith("LeLan") or "',
+                agent_name.substitution, '".startswith("LeLaN")) and "',
                 local_planner.substitution, '" == "dwb" and "',
                 train_mode.substitution, '" == "false"'
             ])
@@ -365,61 +334,6 @@ def generate_launch_description():
         condition=IfCondition(
             PythonExpression([
                 '"', agent_name.substitution, '".startswith("CityWalker") and "',
-                local_planner.substitution, '" == "dwb" and "',
-                train_mode.substitution, '" == "false"'
-            ])
-        ),
-        additional_env=ai_process_env,
-    )
-
-    # ---- LeLan controller ----
-    # Condition: agent_name must start with "LeLan" or "LeLaN".
-    lelan_controller = launch.actions.ExecuteProcess(
-        cmd=[
-            ai_python,
-            lelan_controller_script,
-            '--ros-args',
-            '-r',
-            PythonExpression([
-                '"__node:=lelan_dwb_controller_" + "',
-                namespace.substitution,
-                '".strip("/").replace("/", "_")'
-            ]),
-            '-p', PythonExpression(['"use_sim_time:=', use_sim_time.substitution, '"']),
-            '-p', f'model_config_path:={lelan_config_path}',
-            '-p',
-            PythonExpression(['"agent_name:=', agent_name.substitution, '"']),
-            '-p', 'control_frequency:=10.0',
-            '-p', 'max_linear_velocity:=0.5',
-            '-p', 'max_angular_velocity:=1.0',
-            '-p', 'allow_pure_pursuit_fallback:=false',
-            '-p', 'controller_completion_enabled:=false',
-            '-p', PythonExpression(['"goal_completion_radius:=', goal_tolerance_radius.substitution, '"']),
-            '-p',
-            PythonExpression(['"robot_namespace:=', namespace.substitution, '"']),
-            '-p',
-            PythonExpression(['"image_topic:=', namespace.substitution, '/rgbd_camera/image"']),
-            '-p',
-            PythonExpression(['"goal_topic:=', namespace.substitution, '/goal_pose"']),
-            '-p',
-            PythonExpression(['"goal_topic_secondary:=', namespace.substitution, '/goal_pose"']),
-            '-p',
-            PythonExpression(['"evaluation_topic:=', namespace.substitution, '/evaluation"']),
-            '-p',
-            PythonExpression(['"cmd_vel_topic:=', namespace.substitution, '/cmd_vel"']),
-            '-p', 'instruction_topic:=/nav_instruction',
-            '-p', 'coordinate_mode:=xz_to_ros',
-            '-p', 'gate_waypoint_index:=3',
-            '-p', 'waypoint_gate_radius:=0.25',
-            '-p', 'regeneration_max_attempts:=3',
-            '-p', 'regeneration_min_wp4_delta:=0.20',
-            '-p', 'dwb_score_weight:=0.1',
-        ],
-        output='screen',
-        condition=IfCondition(
-            PythonExpression([
-                '("', agent_name.substitution, '".startswith("LeLan") or "',
-                agent_name.substitution, '".startswith("LeLaN")) and "',
                 local_planner.substitution, '" == "dwb" and "',
                 train_mode.substitution, '" == "false"'
             ])
@@ -470,10 +384,8 @@ def generate_launch_description():
         nav2_launch,
         rosnav_rl_action_server,
         socialnav_bridge,
-        socialnav_controller,
-        urbannav_controller,
+        ai_controller,
         citywalker_controller,
-        lelan_controller,
         # pure_dwb_controller,
         data_recorder,
     ])

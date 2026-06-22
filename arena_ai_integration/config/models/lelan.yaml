@@ -1,0 +1,80 @@
+project_name: lelan-release
+run_name: lelan
+
+# training setup
+use_wandb: False # set to false if you don't want to log to wandb
+train: True
+batch_size: 256
+eval_batch_size: 400
+epochs: 100
+gpu_ids: [0]
+num_workers: 12 #12
+lr: 1e-4
+optimizer: adamw
+clipping: False
+max_norm: 1.
+scheduler: "cosine"
+warmup: True 
+warmup_epochs: 4
+cyclic_period: 10
+plateau_patience: 3
+plateau_factor: 0.5
+seed: 0
+
+# model params
+model_type: lelan #lnp_freeze_clip
+vision_encoder: lelan_clip_film
+encoding_size: 256
+obs_encoder: efficientnet-b0
+clip_type: "ViT-B/32"
+cond_predict_scale: False
+mha_num_attention_heads: 4
+mha_num_attention_layers: 4
+mha_ff_dim_factor: 4
+down_dims: [64, 128, 256]
+
+# normalization for the action space
+normalize: True
+
+# context
+context_type: temporal
+context_size: 8 # 1
+alpha: 1e-4
+
+# action output params
+len_traj_pred: 8
+learn_angle: False
+
+# dataset specific parameters
+image_size: [224, 224] # width, height
+feature_size: 4096
+
+datasets:
+  data_custom:
+    data_format: data_custom
+    data_root: /data/minhdo/datasets/socialwalker/data_custom_5000
+    train_split: train
+    test_split: test_seen
+    max_train_samples: 9999999999 
+    max_val_samples: 9999999999 
+    max_test_samples_seen: 9999999999 
+    max_test_samples_unseen: 9999999999 
+    waypoint_spacing: 1
+    search_range: [10, 60]
+    arrived_prob: 0.2
+    arrived_threshold: 5.0
+    video_freq: 1
+    pose_freq: 1
+    target_freq: 1
+    goal_pose_source: target_pose
+    input_noise: 0.0
+
+# logging stuff
+print_log_freq: 1000 # in iterations
+image_log_freq: 40 #0 # in iterations 1000 40
+num_images_log: 8 #0 
+pairwise_test_freq: 0 # in epochs
+eval_fraction: 5. # 0.25
+wandb_log_freq: 10 # in iterations
+eval_freq: 5 # in epochs 20
+save_freq: 5 # in epochs

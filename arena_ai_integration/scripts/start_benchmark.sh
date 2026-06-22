@@ -649,6 +649,8 @@ stop_sidecars() {
     pkill -9 -f "urbannav_dwb_node.py" 2>/dev/null || true
     pkill -9 -f "citywalker_dwb_node.py" 2>/dev/null || true
     pkill -9 -f "lelan_dwb_node.py" 2>/dev/null || true
+    pkill -9 -f "arena_ai_integration.nodes.ai_controller_node" 2>/dev/null || true
+    pkill -9 -f "/arena_ai_integration/ai_controller" 2>/dev/null || true
     pkill -9 -f "human_states_bridge.py" 2>/dev/null || true
     pkill -9 -f "semantic_laser_filter.py" 2>/dev/null || true
     
@@ -657,6 +659,7 @@ stop_sidecars() {
     pkill -9 -f "urbannav_dwb_controller" 2>/dev/null || true
     pkill -9 -f "citywalker_dwb_controller" 2>/dev/null || true
     pkill -9 -f "lelan_dwb_controller" 2>/dev/null || true
+    pkill -9 -f "ai_controller_" 2>/dev/null || true
     
     sleep 6
     

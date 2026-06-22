@@ -50,9 +50,6 @@ except Exception as exc:  # pragma: no cover - depends on deployment env
     torch = None
     TORCH_IMPORT_ERROR = exc
 
-SOCIAL_NAV_ROOT = Path(__file__).resolve().parents[4] / 'social-nav'
-
-
 class BaseAINode(Node):
     def __init__(self, agent: BaseAgent):
         super().__init__('ai_controller')
@@ -63,11 +60,11 @@ class BaseAINode(Node):
             namespace='',
             parameters=[
                 ('agent_name',           '', ParameterDescriptor()),
-                ('model_config_path',     str(SOCIAL_NAV_ROOT / agent.config.default_config_filename), ParameterDescriptor()),
+                ('model_config_path',     str(agent.default_config_path()), ParameterDescriptor()),
                 ('model_checkpoint_path', '', ParameterDescriptor()),
                 ('history_length',        8,  ParameterDescriptor()),
-                ('control_frequency',     3.0, ParameterDescriptor()),
-                ('arrival_threshold',     2.5, ParameterDescriptor()),
+                ('control_frequency',     agent.config.control_frequency, ParameterDescriptor()),
+                ('arrival_threshold',     agent.config.arrival_threshold, ParameterDescriptor()),
                 ('use_arrival_completion', False, ParameterDescriptor()),
                 ('controller_reset_enabled', False, ParameterDescriptor(
                     description='Allow this AI controller to call reset_task; keep false for benchmark runs')),
@@ -84,16 +81,16 @@ class BaseAINode(Node):
                 ('dwb_cmd_staleness_sec', 1.0, ParameterDescriptor()),
                 ('enable_bev_visualization', False, ParameterDescriptor()),
                 ('bev_visualization_period_sec', 1.0, ParameterDescriptor()),
-                ('look_ahead_distance',   1.25, ParameterDescriptor()),
+                ('look_ahead_distance',   agent.config.look_ahead_distance, ParameterDescriptor()),
                 ('max_linear_velocity',   1.0, ParameterDescriptor()),
                 ('max_angular_velocity',  1.5, ParameterDescriptor()),
                 ('enable_human_tracking', True, ParameterDescriptor()),
                 ('max_humans',            10,  ParameterDescriptor()),
                 ('human_context_radius',  10.0, ParameterDescriptor(
                     description='Only pass humans within this robot-local radius to SocialNav; <= 0 disables filtering')),
-                ('path_waypoint_index',    3, ParameterDescriptor(
+                ('path_waypoint_index',    agent.config.path_waypoint_index, ParameterDescriptor(
                     description='Zero-based AI waypoint index inserted into the DWB FollowPath path')),
-                ('ai_rejoin_skip_distance', 2.5, ParameterDescriptor(
+                ('ai_rejoin_skip_distance', agent.config.rejoin_skip_distance, ParameterDescriptor(
                     description='Meters to advance along the global path after the nearest AI waypoint rejoin point')),
                 ('phase_local_goal_enabled', True, ParameterDescriptor(
                     description='Use AI local subgoals before returning to the benchmark/global goal')),
@@ -136,8 +133,12 @@ class BaseAINode(Node):
                     description='Consecutive AI inference failures before falling back to DWB')),
                 ('goal_frame', 'odom', ParameterDescriptor(
                     description='Deprecated; AI waypoints are inserted into FollowPath paths')),
-                ('flip_y_axis', True, ParameterDescriptor(
+                ('flip_y_axis', agent.config.flip_y_axis, ParameterDescriptor(
                     description='Flip sign of model output Y to match ROS convention (y positive = left)')),
+                ('coordinate_mode', str(agent.config.extra_params.get('coordinate_mode', '')), ParameterDescriptor(
+                    description='Agent-specific waypoint coordinate conversion mode')),
+                ('waypoint_scale', float(agent.config.extra_params.get('waypoint_scale', 1.0)), ParameterDescriptor(
+                    description='Optional agent-specific waypoint output scale')),
             ]
         )
 
@@ -252,6 +253,13 @@ class BaseAINode(Node):
         ))
         self.goal_frame            = str(self.get_parameter('goal_frame').value).strip() or 'map'
         self.flip_y_axis = self.get_parameter('flip_y_axis').value
+        self.agent.config.flip_y_axis = self.flip_y_axis
+        coordinate_mode = str(self.get_parameter('coordinate_mode').value).strip()
+        if coordinate_mode:
+            self.agent.config.extra_params['coordinate_mode'] = coordinate_mode
+        self.agent.config.extra_params['waypoint_scale'] = float(
+            self.get_parameter('waypoint_scale').value
+        )
 
         self.image_topic = configured_image_topic or f'{self.robot_namespace}/rgbd_camera/image'
         self.odom_topic = f'{self.robot_namespace}/odom'
@@ -263,10 +271,8 @@ class BaseAINode(Node):
         model_checkpoint_value = str(self.get_parameter('model_checkpoint_path').value).strip()
         if model_checkpoint_value:
             model_checkpoint_path = Path(model_checkpoint_value)
-        elif self.agent_name:
-            model_checkpoint_path = SOCIAL_NAV_ROOT / 'ckpt' / f'{self.agent_name}.pth'
         else:
-            model_checkpoint_path = SOCIAL_NAV_ROOT / agent.config.default_checkpoint_filename
+            model_checkpoint_path = self.agent.default_checkpoint_path(self.agent_name)
 
         self.device = 'cpu'
         self.model = None
@@ -287,6 +293,9 @@ class BaseAINode(Node):
         elif self.agent.load(model_config_path, model_checkpoint_path, self.get_logger()):
             self.model = self.agent
             self.device = self.agent.device
+
+        if self.agent.name == 'lelan' and hasattr(self.agent, 'context_size'):
+            self.history_length = int(getattr(self.agent, 'context_size'))
 
         self._cuda_stream = None
         if torch is not None and self.device == 'cuda' and torch.cuda.is_available():
@@ -1814,12 +1823,7 @@ class BaseAINode(Node):
                 )
 
             # 4. Chuyển đổi trục: model output → ROS local frame
-            ros_waypoints = np.zeros_like(waypoints)
-            ros_waypoints[:, 0] = waypoints[:, 0]
-            if self.flip_y_axis:
-                ros_waypoints[:, 1] = -waypoints[:, 1]
-            else:
-                ros_waypoints[:, 1] = waypoints[:, 1]
+            ros_waypoints = self.agent.to_ros_waypoints(waypoints)
 
             # Inference thành công → reset bộ đếm lỗi
             self._ai_consecutive_failures = 0
@@ -2232,5 +2236,3 @@ class BaseAINode(Node):
         self.path_request_in_progress = False
         self._ai_consecutive_failures = 0
         self._reset_phase_state()
-
-

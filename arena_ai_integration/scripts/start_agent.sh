@@ -7,22 +7,29 @@ ENABLE_HUMAN_TRACKING="${ENABLE_HUMAN_TRACKING:-true}"
 ENABLE_VISUALIZATION="${ENABLE_VISUALIZATION:-true}"
 TRAIN_MODE="${TRAIN_MODE:-false}"
 
-SOCIAL_NAV_DIR="$WORKSPACE_DIR/src/social-nav"
+AI_INTEGRATION_DIR="$WORKSPACE_DIR/src/Arena/arena_ai_integration"
+SOCIAL_NAV_DIR="$WORKSPACE_DIR/src/arena-social-nav"
 
 case "$AGENT_TYPE" in
   socialnav)
-    MODEL_CONFIG="${MODEL_CONFIG:-$SOCIAL_NAV_DIR/configs/socialnav_film.yaml}"
-    MODEL_CHECKPOINT="${MODEL_CHECKPOINT:-$SOCIAL_NAV_DIR/ckpt/SocialNav_margin.pth}"
+    MODEL_CONFIG="${MODEL_CONFIG:-$AI_INTEGRATION_DIR/config/models/socialnav_film.yaml}"
+    MODEL_CHECKPOINT="${MODEL_CHECKPOINT:-$AI_INTEGRATION_DIR/checkpoints/SocialNav_1_path.pth}"
     PARAMS_FILE="socialnav_params.yaml"
     ;;
   urbannav)
-    MODEL_CONFIG="${MODEL_CONFIG:-$SOCIAL_NAV_DIR/configs/urbannav_film.yaml}"
-    MODEL_CHECKPOINT="${MODEL_CHECKPOINT:-$SOCIAL_NAV_DIR/ckpt/UrbanNav_FiLM.pth}"
+    MODEL_CONFIG="${MODEL_CONFIG:-$AI_INTEGRATION_DIR/config/models/urbannav_film.yaml}"
+    MODEL_CHECKPOINT="${MODEL_CHECKPOINT:-$AI_INTEGRATION_DIR/checkpoints/UrbanNav_FiLM.pth}"
     PARAMS_FILE="urbannav_params.yaml"
     ENABLE_HUMAN_TRACKING="${ENABLE_HUMAN_TRACKING:-false}"
     ;;
+  lelan)
+    MODEL_CONFIG="${MODEL_CONFIG:-$AI_INTEGRATION_DIR/config/models/lelan.yaml}"
+    MODEL_CHECKPOINT="${MODEL_CHECKPOINT:-$AI_INTEGRATION_DIR/checkpoints/LeLan_latest.pth}"
+    PARAMS_FILE="lelan_params.yaml"
+    ENABLE_HUMAN_TRACKING="${ENABLE_HUMAN_TRACKING:-false}"
+    ;;
   *)
-    echo "[ERROR] Unsupported AGENT_TYPE=$AGENT_TYPE (use socialnav or urbannav)"
+    echo "[ERROR] Unsupported AGENT_TYPE=$AGENT_TYPE (use socialnav, urbannav, or lelan)"
     exit 1
     ;;
 esac

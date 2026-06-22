@@ -1,10 +1,14 @@
-# UrbanNav-specific overrides
+# LeLaN-specific overrides
 /**:
   ros__parameters:
-    agent_type: urbannav
+    agent_type: lelan
     control_frequency: 5.0
     look_ahead_distance: 0.5
     arrival_threshold: 0.7
     ai_rejoin_skip_distance: 0.8
     enable_bev_visualization: true
     enable_human_tracking: false
+    max_linear_velocity: 0.5
+    max_angular_velocity: 1.0
+    coordinate_mode: xz_to_ros
+    waypoint_scale: 1.0

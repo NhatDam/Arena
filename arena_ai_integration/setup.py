@@ -13,6 +13,8 @@ setup(
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/launch', glob('launch/*.launch.py')),
         ('share/' + package_name + '/config', glob('config/*.yaml')),
+        ('share/' + package_name + '/config/models', glob('config/models/*.yaml')),
+        ('share/' + package_name + '/checkpoints', glob('checkpoints/*') + ['checkpoints/.gitkeep']),
         ('share/' + package_name + '/scripts', glob('scripts/*.sh')),
     ],
     install_requires=['setuptools'],

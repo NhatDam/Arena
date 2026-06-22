@@ -4,10 +4,16 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+import os
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
 import numpy as np
+
+try:
+    from ament_index_python.packages import get_package_share_directory
+except Exception:  # pragma: no cover - available after ROS environment setup
+    get_package_share_directory = None
 
 
 @dataclass
@@ -59,6 +65,42 @@ class BaseAgent(ABC):
     @property
     def device(self) -> str:
         return self._device
+
+    @staticmethod
+    def workspace_dir() -> Path:
+        return Path(os.environ.get('WORKSPACE_DIR', Path.home() / 'arena5_ws')).expanduser()
+
+    @staticmethod
+    def package_share_dir() -> Path:
+        if get_package_share_directory is not None:
+            try:
+                return Path(get_package_share_directory('arena_ai_integration'))
+            except Exception:
+                pass
+        return Path(__file__).resolve().parents[2]
+
+    @classmethod
+    def package_source_dir(cls) -> Path:
+        return cls.workspace_dir() / 'src' / 'Arena' / 'arena_ai_integration'
+
+    def default_config_path(self) -> Path:
+        for root in (self.package_source_dir(), self.package_share_dir()):
+            candidate = root / self.config.default_config_filename
+            if candidate.exists():
+                return candidate
+        return self.package_share_dir() / self.config.default_config_filename
+
+    def default_checkpoint_path(self, agent_name: str = '') -> Path:
+        for root in (self.package_source_dir(), self.package_share_dir()):
+            checkpoint_dir = root / 'checkpoints'
+            if agent_name:
+                candidate = checkpoint_dir / f'{agent_name}.pth'
+                if candidate.exists():
+                    return candidate
+            candidate = root / self.config.default_checkpoint_filename
+            if candidate.exists():
+                return candidate
+        return self.package_share_dir() / self.config.default_checkpoint_filename
 
     @abstractmethod
     def load(self, config_path: Path, checkpoint_path: Path, logger=None) -> bool:

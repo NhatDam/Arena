@@ -11,14 +11,24 @@ import numpy as np
 
 from arena_ai_integration.agents.base_agent import AgentConfig, BaseAgent, PredictionContext
 
-SOCIAL_NAV_ROOT = Path(__file__).resolve().parents[4] / 'social-nav'
+
+def _social_nav_root() -> Path:
+    workspace = BaseAgent.workspace_dir()
+    for candidate in (
+        workspace / 'src' / 'arena-social-nav',
+        workspace / 'src' / 'social-nav',
+    ):
+        if candidate.exists():
+            return candidate
+    return workspace / 'src' / 'arena-social-nav'
 
 
 def _ensure_social_nav_path(subdir: str) -> None:
-    root = str(SOCIAL_NAV_ROOT / 'ros2_nodes' / subdir)
+    social_nav_root = _social_nav_root()
+    root = str(social_nav_root / 'ros2_nodes' / subdir)
     if root not in sys.path:
         sys.path.insert(0, root)
-    repo = str(SOCIAL_NAV_ROOT)
+    repo = str(social_nav_root)
     if repo not in sys.path:
         sys.path.insert(0, repo)
 
@@ -27,8 +37,8 @@ class UrbanNavAgent(BaseAgent):
     DEFAULT_CONFIG = AgentConfig(
         name='urbannav',
         topic_prefix='urbannav',
-        default_config_filename='configs/urbannav_film.yaml',
-        default_checkpoint_filename='ckpt/UrbanNav_FiLM.pth',
+        default_config_filename='config/models/urbannav_film.yaml',
+        default_checkpoint_filename='checkpoints/UrbanNav_FiLM.pth',
         flip_y_axis=True,
         allow_model_soft_fail=False,
         rejoin_skip_distance=0.8,

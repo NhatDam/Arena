@@ -68,3 +68,7 @@ __pycache__/
 
 # agents
 /arena_training/agents/
+
+# AI checkpoints
+/arena_ai_integration/checkpoints/*
+!/arena_ai_integration/checkpoints/.gitkeep

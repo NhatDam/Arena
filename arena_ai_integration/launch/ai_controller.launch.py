@@ -21,17 +21,6 @@ def generate_launch_description():
 
     agent_type = LaunchConfiguration('agent_type')
 
-    config_map = {
-        'socialnav': os.path.join(pkg_share, 'config', 'socialnav_params.yaml'),
-        'urbannav': os.path.join(pkg_share, 'config', 'urbannav_params.yaml'),
-    }
-
-    # Default config file resolved at launch time via agent_type env substitution
-    default_params = [
-        os.path.join(pkg_share, 'config', 'base_params.yaml'),
-        os.path.join(pkg_share, 'config', 'socialnav_params.yaml'),
-    ]
-
     controller_node = Node(
         package='arena_ai_integration',
         executable='ai_controller',
@@ -47,7 +36,7 @@ def generate_launch_description():
     params_file_arg = DeclareLaunchArgument(
         'params_file',
         default_value=os.path.join(pkg_share, 'config', 'socialnav_params.yaml'),
-        description='Agent-specific parameter YAML',
+        description='Agent-specific parameter YAML: socialnav_params, urbannav_params, or lelan_params',
     )
 
     return LaunchDescription([
