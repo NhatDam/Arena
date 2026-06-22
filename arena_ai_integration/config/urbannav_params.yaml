@@ -1,0 +1,12 @@
+# UrbanNav-specific overrides
+/**:
+  ros__parameters:
+    agent_type: urbannav
+    control_frequency: 5.0
+    look_ahead_distance: 0.5
+    arrival_threshold: 0.7
+    ai_rejoin_skip_distance: 0.8
+    enable_bev_visualization: true
+    enable_human_tracking: false
+    model_config_path: /home/nguyenduytan/arena5_ws/src/social-nav/configs/urbannav_film.yaml
+    model_checkpoint_path: /home/nguyenduytan/arena5_ws/src/social-nav/ckpt/UrbanNav_FiLM.pth

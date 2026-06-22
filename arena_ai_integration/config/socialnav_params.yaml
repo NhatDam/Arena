@@ -1,0 +1,13 @@
+# SocialNav-specific overrides
+/**:
+  ros__parameters:
+    agent_type: socialnav
+    control_frequency: 3.0
+    look_ahead_distance: 1.25
+    arrival_threshold: 2.5
+    ai_rejoin_skip_distance: 2.5
+    enable_bev_visualization: false
+    enable_human_tracking: true
+    human_context_radius: 10.0
+    model_config_path: /home/nguyenduytan/arena5_ws/src/social-nav/configs/socialnav_film.yaml
+    model_checkpoint_path: /home/nguyenduytan/arena5_ws/src/social-nav/ckpt/SocialNav_margin.pth
