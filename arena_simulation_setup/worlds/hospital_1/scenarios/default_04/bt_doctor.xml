@@ -1,0 +1,28 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<root main_tree_to_execute="hunav_1_behavior_tree" BTCPP_format="4">
+    <TreeNodesModel>
+        <Action ID="SetGoal">
+            <input_port name="agent_id" type="int" />
+            <input_port name="target_x" type="double" />
+            <input_port name="target_y" type="double" />
+            <input_port name="goal_id" type="int" />
+        </Action>
+    </TreeNodesModel>
+    <include ros_pkg="arena_simulation_setup" path="configs/hunav/behavior_trees/BTRegularNav.xml" />
+    <!--
+        DOCTOR: exam_room_1 -> patient_ward  (both LEFT side, doors on x=8 wall)
+        Start pos: (4.0, 7.5)  inside exam_room_1
+        Goal:      (4.0, 14.1) inside patient_ward  (bed 1 area)
+        Path: exits exam_room_1_door (x=8, y=6.8-8.3)
+              walks north in hallway
+              enters patient_ward_door_1 (x=8, y=13.35-14.85)
+    -->
+    <BehaviorTree ID="hunav_1_behavior_tree">
+        <Sequence>
+            <Sequence>
+                <SetGoal agent_id="{id}" goal_id="0" target_x="15.0" target_y="27.0" />
+                <GoTo    agent_id="{id}" goal_id="0" time_step="0.1" tolerance="0.1" />
+            </Sequence>
+        </Sequence>
+    </BehaviorTree>
+</root>
