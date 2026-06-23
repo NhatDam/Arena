@@ -11,6 +11,8 @@ import arena_people_msgs.msg
 import arena_robots.Robot
 import arena_simulation_setup.tree.assets.Material
 import isaacsim_msgs.msg
+import launch
+import launch_ros.actions
 import numpy as np
 import std_msgs.msg
 import std_srvs.srv
@@ -41,6 +43,7 @@ from isaacsim_msgs.srv import (
     SpawnUsd,
     SpawnWalls,
 )
+from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
 from std_msgs.msg import String as StdString
 
 from task_generator.shared import Door as DoorDefinition
@@ -102,6 +105,55 @@ class IsaacSimulator(BaseSim, NodeInterface):
         # Publisher for external registration messages so IsaacSim's DoorManager
         # can be informed about spawned entities in the IsaacSim process.
         self._reg_pub = self.node.create_publisher(StdString, '/isaac/register_entity', 10)
+        self._robot_description_pubs = {}
+        self._robot_state_publishers = set()
+
+    def _publish_robot_description(self, robot: Robot, description: str) -> None:
+        topic = self.node.service_namespace(robot.name, 'robot_description')
+        publisher = self._robot_description_pubs.get(topic)
+        if publisher is None:
+            publisher = self.node.create_publisher(
+                StdString,
+                topic,
+                QoSProfile(
+                    depth=1,
+                    durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+                    reliability=QoSReliabilityPolicy.RELIABLE,
+                ),
+            )
+            self._robot_description_pubs[topic] = publisher
+        publisher.publish(StdString(data=description))
+        self._logger.info(f'Published robot_description for {robot.name} on {topic}')
+
+    async def _launch_robot_state_publisher(self, robot: Robot, description: str) -> None:
+        key = self.node.service_namespace(robot.name)
+        if key in self._robot_state_publishers:
+            return
+
+        launch_description = launch.LaunchDescription()
+        launch_description.add_action(
+            launch_ros.actions.PushRosNamespace(namespace=key)
+        )
+        launch_description.add_action(
+            launch_ros.actions.Node(
+                package='robot_state_publisher',
+                executable='robot_state_publisher',
+                name='robot_state_publisher',
+                output='screen',
+                parameters=[
+                    {'use_sim_time': True},
+                    {'robot_description': description},
+                    {'frame_prefix': f'{robot.name}/'},
+                ],
+                remappings=[
+                    ('joint_states', self.node.service_namespace(robot.name, 'joint_states')),
+                ],
+            )
+        )
+
+        await self.node.do_launch(launch_description)
+        self._robot_state_publishers.add(key)
+        self._logger.info(f'Launched robot_state_publisher for {robot.name} in {key}')
 
     async def robot_spawn(self, robots):
         async def impl(robot: Robot) -> bool:
@@ -135,6 +187,8 @@ class IsaacSimulator(BaseSim, NodeInterface):
                             odom_topic=self.node.service_namespace(robot.name, 'odom'),
                         )
                     )
+                    self._publish_robot_description(robot, model.description)
+                    await self._launch_robot_state_publisher(robot, model.description)
 
                     base_frame = robot_params.base_frame
                     robot_prim_path = os.path.join("/World", fq_name, base_frame)

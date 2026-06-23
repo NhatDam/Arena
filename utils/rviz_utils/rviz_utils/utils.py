@@ -244,6 +244,7 @@ class Utils:
                 "Name": "Robot Model",
                 "Enabled": True,
                 "TF Prefix": robot_name,
+                "Description Source": "Topic",
                 "Description Topic": {
                     "Value": topic,
                     "Depth": queue_size,

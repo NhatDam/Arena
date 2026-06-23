@@ -69,6 +69,10 @@ PLOTS_OUTPUT_DIR="$WORKSPACE_DIR/results/postprocess"
 
 SOURCE_PYTHONPATH="$WORKSPACE_DIR/src/Arena/task_generator:$WORKSPACE_DIR/src/Arena/arena_simulation_setup:$WORKSPACE_DIR/src/Arena/arena_bringup:$WORKSPACE_DIR/src/Arena/arena_evaluation"
 export SOURCE_PYTHONPATH
+ARENA_ASSETS_DIR="${ARENA_ASSETS_DIR:-$WORKSPACE_DIR/src/Arena/_assets}"
+ARENA_ASSETS_DIR_LOCAL="${ARENA_ASSETS_DIR_LOCAL:-$ARENA_ASSETS_DIR/_local}"
+ASSET_BUCKETS="${ASSET_BUCKETS:-default}"
+export ARENA_ASSETS_DIR ARENA_ASSETS_DIR_LOCAL ASSET_BUCKETS
 BENCHMARK_CONDA_ENV="${BENCHMARK_CONDA_ENV:-socialnav}"
 ARENA_AI_PYTHONNOUSERSITE="${ARENA_AI_PYTHONNOUSERSITE:-1}"
 export ARENA_AI_PYTHONNOUSERSITE
@@ -890,6 +894,16 @@ start_arena_process() {
 
     if [ -n "${ARENA_BENCHMARK_EPISODE_TOTAL:-}" ]; then
         clean_env+=(ARENA_BENCHMARK_EPISODE_TOTAL="$ARENA_BENCHMARK_EPISODE_TOTAL")
+    fi
+
+    clean_env+=(
+        ARENA_ASSETS_DIR="$ARENA_ASSETS_DIR"
+        ARENA_ASSETS_DIR_LOCAL="$ARENA_ASSETS_DIR_LOCAL"
+        ASSET_BUCKETS="$ASSET_BUCKETS"
+    )
+
+    if [ -n "${ARENA_MODELS_FORMATS:-}" ]; then
+        clean_env+=(ARENA_MODELS_FORMATS="$ARENA_MODELS_FORMATS")
     fi
 
     echo "[INFO] Launching Arena/Isaac with clean non-conda runtime env."

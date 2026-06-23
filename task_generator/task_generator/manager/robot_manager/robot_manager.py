@@ -6,7 +6,6 @@ import typing
 
 import action_msgs.msg
 import ament_index_python
-import arena_evaluation_msgs.srv as arena_evaluation_srvs
 import arena_bringup.extensions.NodeLogLevelExtension as NodeLogLevelExtension
 import attrs
 import geometry_msgs.msg
@@ -31,6 +30,11 @@ from task_generator import NodeInterface
 from task_generator.constants import Constants
 from task_generator.manager.environment_manager import EnvironmentManager
 from task_generator.shared import Orientation, Pose, Position, Robot
+
+try:
+    import arena_evaluation_msgs.srv as arena_evaluation_srvs
+except ModuleNotFoundError:
+    arena_evaluation_srvs = None
 
 from rclpy.action import ActionClient
 from nav2_msgs.action import NavigateToPose
@@ -1079,6 +1083,12 @@ class RobotManager(NodeInterface):
         )
 
     async def _change_data_recorder_directory(self, record_data_dir: str):
+        if arena_evaluation_srvs is None:
+            self._logger.warning(
+                "arena_evaluation_msgs is not available; data recorder directory update skipped"
+            )
+            return
+
         service_name = str(self.namespace("change_directory"))
         client = self.node.create_client(
             arena_evaluation_srvs.ChangeDirectory,
