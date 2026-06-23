@@ -48,7 +48,6 @@ set -e
 SCRIPT_START_TS=$(date +%s)
 
 export WORKSPACE_DIR="$HOME/arena5_ws"
-SOCIALNAV_DIR="$WORKSPACE_DIR/src/arena-social-nav"
 ARENA_EVAL_DIR="$WORKSPACE_DIR/src/Arena/arena_evaluation/arena_evaluation/arena_evaluation"
 BENCHMARK_CONFIG_ROOT="$WORKSPACE_DIR/src/Arena/arena_bringup/configs/benchmark"
 BENCHMARK_CONFIG="$BENCHMARK_CONFIG_ROOT/config.yaml"
@@ -68,12 +67,11 @@ BENCHMARK_RESULTS_ROOT="$WORKSPACE_DIR/results/${CONTEST_NAME:-social_contest}"
 HUNAV_METRICS_FILE="$WORKSPACE_DIR/results/metrics.csv"
 PLOTS_OUTPUT_DIR="$WORKSPACE_DIR/results/postprocess"
 
-AGGREGATE_SCRIPT="$SOCIALNAV_DIR/ros2_nodes/socialnav/aggregate_benchmark_metrics.py"
 SOURCE_PYTHONPATH="$WORKSPACE_DIR/src/Arena/task_generator:$WORKSPACE_DIR/src/Arena/arena_simulation_setup:$WORKSPACE_DIR/src/Arena/arena_bringup:$WORKSPACE_DIR/src/Arena/arena_evaluation"
 export SOURCE_PYTHONPATH
 BENCHMARK_CONDA_ENV="${BENCHMARK_CONDA_ENV:-socialnav}"
-SOCIALNAV_AI_PYTHONNOUSERSITE="${SOCIALNAV_AI_PYTHONNOUSERSITE:-1}"
-export SOCIALNAV_AI_PYTHONNOUSERSITE
+ARENA_AI_PYTHONNOUSERSITE="${ARENA_AI_PYTHONNOUSERSITE:-1}"
+export ARENA_AI_PYTHONNOUSERSITE
 SYSTEM_PYTHON="${SYSTEM_PYTHON:-/usr/bin/python3}"
 ISAACSIM_PYTHON_SH="${ISAACSIM_PYTHON_SH:-$HOME/isaacsim-4.2.0/python.sh}"
 FASTDDS_TRANSPORT_MODE="${FASTDDS_TRANSPORT_MODE:-udp_only}"
@@ -102,6 +100,7 @@ export ARENA_BENCHMARK_MIN_TIMEOUT_SEC
 ROS_DISABLE_DAEMON="${ROS_DISABLE_DAEMON:-1}"
 export ROS_DISABLE_DAEMON
 RESTART_STACK_EACH_EPISODE="${RESTART_STACK_EACH_EPISODE:-1}"
+ARENA_HEADLESS="${ARENA_HEADLESS:-1}"
 BATCH_CONTINUE_ON_FAILURE="${BATCH_CONTINUE_ON_FAILURE:-1}"
 BENCHMARK_BATCH_ROOT="${BENCHMARK_BATCH_ROOT:-$WORKSPACE_DIR/results/benchmark_batch_configs}"
 BENCHMARK_RUN_ID="${BENCHMARK_RUN_ID:-$(date +%s)}"
@@ -164,7 +163,7 @@ ros2_cli() {
 build_ai_runtime_library_path() {
     local python_bin="$1"
 
-    PYTHONNOUSERSITE="$SOCIALNAV_AI_PYTHONNOUSERSITE" "$python_bin" - <<'PY' 2>/dev/null || true
+    PYTHONNOUSERSITE="$ARENA_AI_PYTHONNOUSERSITE" "$python_bin" - <<'PY' 2>/dev/null || true
 from pathlib import Path
 import sys
 
@@ -230,40 +229,40 @@ activate_benchmark_conda_env() {
 
     local python_bin
     python_bin="$(python3 -c 'import sys; print(sys.executable)')"
-    SOCIALNAV_AI_PYTHON="${SOCIALNAV_AI_PYTHON:-$python_bin}"
-    export SOCIALNAV_AI_PYTHON
+    ARENA_AI_PYTHON="${ARENA_AI_PYTHON:-$python_bin}"
+    export ARENA_AI_PYTHON
 
-    SOCIALNAV_AI_RUNTIME_LIBRARY_PATH="$(
-        build_ai_runtime_library_path "$SOCIALNAV_AI_PYTHON"
+    ARENA_AI_RUNTIME_LIBRARY_PATH="$(
+        build_ai_runtime_library_path "$ARENA_AI_PYTHON"
     )"
-    export SOCIALNAV_AI_RUNTIME_LIBRARY_PATH
+    export ARENA_AI_RUNTIME_LIBRARY_PATH
 
-    SOCIALNAV_AI_LD_LIBRARY_PATH="$SOCIALNAV_AI_RUNTIME_LIBRARY_PATH"
+    ARENA_AI_LD_LIBRARY_PATH="$ARENA_AI_RUNTIME_LIBRARY_PATH"
     if [ -n "${LD_LIBRARY_PATH:-}" ]; then
-        SOCIALNAV_AI_LD_LIBRARY_PATH="${SOCIALNAV_AI_LD_LIBRARY_PATH:+$SOCIALNAV_AI_LD_LIBRARY_PATH:}$LD_LIBRARY_PATH"
+        ARENA_AI_LD_LIBRARY_PATH="${ARENA_AI_LD_LIBRARY_PATH:+$ARENA_AI_LD_LIBRARY_PATH:}$LD_LIBRARY_PATH"
     fi
-    export SOCIALNAV_AI_LD_LIBRARY_PATH
+    export ARENA_AI_LD_LIBRARY_PATH
 
     echo "[INFO] Benchmark Python: $python_bin"
     echo "[INFO] Global PYTHONNOUSERSITE=${PYTHONNOUSERSITE:-<unset>}"
-    echo "[INFO] SocialNav AI Python: $SOCIALNAV_AI_PYTHON"
-    echo "[INFO] SocialNav AI PYTHONNOUSERSITE=$SOCIALNAV_AI_PYTHONNOUSERSITE"
-    echo "[INFO] SocialNav AI runtime library path: ${SOCIALNAV_AI_RUNTIME_LIBRARY_PATH:-<empty>}"
+    echo "[INFO] Arena AI Python: $ARENA_AI_PYTHON"
+    echo "[INFO] Arena AI PYTHONNOUSERSITE=$ARENA_AI_PYTHONNOUSERSITE"
+    echo "[INFO] Arena AI runtime library path: ${ARENA_AI_RUNTIME_LIBRARY_PATH:-<empty>}"
 
     local clip_path
-    clip_path="$(LD_LIBRARY_PATH="$SOCIALNAV_AI_LD_LIBRARY_PATH" PYTHONNOUSERSITE="$SOCIALNAV_AI_PYTHONNOUSERSITE" "$SOCIALNAV_AI_PYTHON" -c 'import clip; print(clip.__file__)' 2>/dev/null || true)"
+    clip_path="$(LD_LIBRARY_PATH="$ARENA_AI_LD_LIBRARY_PATH" PYTHONNOUSERSITE="$ARENA_AI_PYTHONNOUSERSITE" "$ARENA_AI_PYTHON" -c 'import clip; print(clip.__file__)' 2>/dev/null || true)"
     if [ -n "$clip_path" ]; then
         echo "[INFO] CLIP module: $clip_path"
     else
-        echo "[WARN] CLIP module is not importable from $SOCIALNAV_AI_PYTHON with AI isolation"
+        echo "[WARN] CLIP module is not importable from $ARENA_AI_PYTHON with AI isolation"
     fi
 
     local torch_info
-    torch_info="$(LD_LIBRARY_PATH="$SOCIALNAV_AI_LD_LIBRARY_PATH" PYTHONNOUSERSITE="$SOCIALNAV_AI_PYTHONNOUSERSITE" "$SOCIALNAV_AI_PYTHON" -c 'import torch; print(f"{torch.__version__} {torch.__file__} cuda_available={torch.cuda.is_available()}")' 2>/dev/null || true)"
+    torch_info="$(LD_LIBRARY_PATH="$ARENA_AI_LD_LIBRARY_PATH" PYTHONNOUSERSITE="$ARENA_AI_PYTHONNOUSERSITE" "$ARENA_AI_PYTHON" -c 'import torch; print(f"{torch.__version__} {torch.__file__} cuda_available={torch.cuda.is_available()}")' 2>/dev/null || true)"
     if [ -n "$torch_info" ]; then
         echo "[INFO] Torch: $torch_info"
     else
-        echo "[WARN] Torch is not importable from $SOCIALNAV_AI_PYTHON with AI isolation"
+        echo "[WARN] Torch is not importable from $ARENA_AI_PYTHON with AI isolation"
     fi
 }
 
@@ -294,9 +293,9 @@ run_python_preflight_checks() {
     fi
 
     local ai_check
-    if ! ai_check="$(LD_LIBRARY_PATH="$SOCIALNAV_AI_LD_LIBRARY_PATH" \
-        PYTHONNOUSERSITE="$SOCIALNAV_AI_PYTHONNOUSERSITE" \
-        "$SOCIALNAV_AI_PYTHON" - <<'PY' 2>&1
+    if ! ai_check="$(LD_LIBRARY_PATH="$ARENA_AI_LD_LIBRARY_PATH" \
+        PYTHONNOUSERSITE="$ARENA_AI_PYTHONNOUSERSITE" \
+        "$ARENA_AI_PYTHON" - <<'PY' 2>&1
 import sys
 import torch
 
@@ -310,18 +309,18 @@ print(f"cuda_available={cuda_ok}")
 print(f"device_count={device_count}")
 
 if ".local/lib" in torch_path:
-    raise SystemExit("Torch resolved from ~/.local; SocialNav must use the conda env torch")
+    raise SystemExit("Torch resolved from ~/.local; Arena AI must use the conda env torch")
 if not cuda_ok:
     raise SystemExit("Torch CUDA is unavailable")
 if device_count < 1:
     raise SystemExit("No CUDA devices visible to Torch")
 PY
     )"; then
-        echo "[ERROR] SocialNav AI Python failed CUDA/Torch preflight:"
+        echo "[ERROR] Arena AI Python failed CUDA/Torch preflight:"
         printf '%s\n' "$ai_check"
         fail=1
     else
-        echo "[PASS] SocialNav AI Torch/CUDA preflight:"
+        echo "[PASS] Arena AI Torch/CUDA preflight:"
         printf '%s\n' "$ai_check" | sed 's/^/[INFO]   /'
     fi
 
@@ -644,21 +643,17 @@ stop_hunav_recording() {
 stop_sidecars() {
     echo "[INFO] Force stopping benchmark sidecar processes..."
     
-    # Kill mạnh tay tất cả các process liên quan
-    pkill -9 -f "socialnav_dwb_node.py" 2>/dev/null || true
-    pkill -9 -f "urbannav_dwb_node.py" 2>/dev/null || true
+    # Kill sidecar/controller processes from the Arena AI integration path.
     pkill -9 -f "citywalker_dwb_node.py" 2>/dev/null || true
-    pkill -9 -f "lelan_dwb_node.py" 2>/dev/null || true
     pkill -9 -f "arena_ai_integration.nodes.ai_controller_node" 2>/dev/null || true
     pkill -9 -f "/arena_ai_integration/ai_controller" 2>/dev/null || true
-    pkill -9 -f "human_states_bridge.py" 2>/dev/null || true
-    pkill -9 -f "semantic_laser_filter.py" 2>/dev/null || true
+    pkill -9 -f "arena_ai_integration.nodes.human_states_bridge" 2>/dev/null || true
+    pkill -9 -f "arena_ai_integration.nodes.semantic_laser_filter" 2>/dev/null || true
+    pkill -9 -f "/arena_ai_integration/human_states_bridge" 2>/dev/null || true
+    pkill -9 -f "/arena_ai_integration/semantic_laser_filter" 2>/dev/null || true
     
-    # Kill cả python processes đang chạy các controller benchmark
-    pkill -9 -f "socialnav_dwb_controller" 2>/dev/null || true
-    pkill -9 -f "urbannav_dwb_controller" 2>/dev/null || true
+    # Kill Python controller processes launched by benchmark wrappers.
     pkill -9 -f "citywalker_dwb_controller" 2>/dev/null || true
-    pkill -9 -f "lelan_dwb_controller" 2>/dev/null || true
     pkill -9 -f "ai_controller_" 2>/dev/null || true
     
     sleep 6
@@ -917,7 +912,7 @@ start_arena_process() {
             tm_modules:=benchmark \
             use_sim_time:=true \
             local_planner:=dwb \
-            headless:=1
+            headless:="$ARENA_HEADLESS"
     ' &
     ARENA_PID=$!
 }
@@ -1077,7 +1072,7 @@ postprocess_results() {
         if [ -f "$HUNAV_METRICS_FILE" ]; then
             CURRENT_RUN_ID="${BENCHMARK_RUN_ID#t}"
             echo "[INFO] Writing scenario averages to $PLOTS_OUTPUT_DIR/metrics_agv.csv"
-            python3 "$AGGREGATE_SCRIPT" \
+            python3 -m arena_ai_integration.tools.aggregate_benchmark_metrics \
                 --input "$HUNAV_METRICS_FILE" \
                 --output "$PLOTS_OUTPUT_DIR/metrics_agv.csv" \
                 --run-id "$CURRENT_RUN_ID"

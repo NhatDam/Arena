@@ -4,9 +4,9 @@ Unified ROS 2 integration for AI navigation agents in Arena.
 
 ## Architecture
 
-`arena_ai_integration` owns the AI-DWB runtime. The old per-model controllers in
-`arena-social-nav/ros2_nodes` and `arena-lelan/ros2_nodes` are no longer launched
-directly for SocialNav, UrbanNav, or LeLaN benchmark runs.
+`arena_ai_integration` owns the AI-DWB runtime for SocialNav, UrbanNav, and
+LeLaN benchmark runs. Model inference code, ROS sidecars, and benchmark helpers
+are packaged inside this ROS 2 package.
 
 Runtime flow:
 
@@ -46,11 +46,11 @@ arena_ai_integration/config/models/
 
 ## Agents
 
-| agent_type | Default checkpoint | Legacy model wrapper |
+| agent_type | Default checkpoint | Runtime module |
 | --- | --- | --- |
-| `socialnav` | `SocialNav_1_path.pth` | `arena-social-nav/ros2_nodes/socialnav/socialnav_ros2_node.py` |
-| `urbannav` | `UrbanNav_FiLM.pth` | `arena-social-nav/ros2_nodes/urbannav/urbannav_ros2_node.py` |
-| `lelan` | `LeLan_latest.pth` | `arena-lelan/ros2_nodes/lelan/lelan_ros2_node.py` |
+| `socialnav` | `SocialNav_1_path.pth` | `arena_ai_integration.models.socialnav.runtime.SocialNavModel` |
+| `urbannav` | `UrbanNav_FiLM.pth` | `arena_ai_integration.models.socialnav.runtime.UrbanNavModel` |
+| `lelan` | `LeLan_latest.pth` | `arena_ai_integration.models.lelan.runtime.LeLaNInferenceModel` |
 
 `agent_name` still selects the checkpoint name when a matching
 `checkpoints/<agent_name>.pth` exists. `agent_type` selects the wrapper class.
@@ -84,8 +84,17 @@ LeLan* / LeLaN* -> agent_type=lelan
 Pure DWB baselines should use an empty/non-AI `agent_name`, so no AI controller is
 launched.
 
+Runtime modules:
+
+```text
+python3 -m arena_ai_integration.nodes.ai_controller_node
+python3 -m arena_ai_integration.nodes.human_states_bridge
+python3 -m arena_ai_integration.nodes.semantic_laser_filter
+python3 -m arena_ai_integration.tools.aggregate_benchmark_metrics
+```
+
 ## Conflict Rule
 
 Only one AI controller should run for a robot namespace. Do not launch
-`socialnav_dwb_node.py`, `urbannav_dwb_node.py`, or `lelan_dwb_node.py` together
-with `arena_ai_integration`.
+additional external controllers together with `arena_ai_integration` for the same
+robot namespace.

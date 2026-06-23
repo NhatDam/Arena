@@ -24,9 +24,20 @@ setup(
     description='Unified AI controller integration for Arena-Rosnav',
     license='Apache-2.0',
     tests_require=['pytest'],
+    options={
+        'develop': {
+            'script_dir': '$base/lib/' + package_name,
+        },
+        'install': {
+            'install_scripts': '$base/lib/' + package_name,
+        },
+    },
     entry_points={
         'console_scripts': [
             'ai_controller = arena_ai_integration.nodes.ai_controller_node:main',
+            'human_states_bridge = arena_ai_integration.nodes.human_states_bridge:main',
+            'semantic_laser_filter = arena_ai_integration.nodes.semantic_laser_filter:main',
+            'aggregate_benchmark_metrics = arena_ai_integration.tools.aggregate_benchmark_metrics:main',
         ],
     },
 )

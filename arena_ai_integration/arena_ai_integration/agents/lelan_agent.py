@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sys
 import traceback
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -10,23 +9,6 @@ from typing import List, Optional, Tuple
 import numpy as np
 
 from arena_ai_integration.agents.base_agent import AgentConfig, BaseAgent, PredictionContext
-
-
-def _lelan_root() -> Path:
-    workspace = BaseAgent.workspace_dir()
-    return workspace / 'src' / 'arena-lelan'
-
-
-def _ensure_lelan_path() -> None:
-    root = _lelan_root()
-    for path in (
-        root / 'ros2_nodes' / 'lelan',
-        root / 'train',
-        root / 'src',
-    ):
-        path_str = str(path)
-        if path.exists() and path_str not in sys.path:
-            sys.path.insert(0, path_str)
 
 
 class LeLanAgent(BaseAgent):
@@ -55,8 +37,7 @@ class LeLanAgent(BaseAgent):
     def load(self, config_path: Path, checkpoint_path: Path, logger=None) -> bool:
         try:
             import torch
-            _ensure_lelan_path()
-            from lelan_ros2_node import LeLaNInferenceModel
+            from arena_ai_integration.models.lelan.runtime import LeLaNInferenceModel
 
             if not config_path.exists():
                 raise FileNotFoundError(f"LeLaN config not found: {config_path}")

@@ -17,7 +17,7 @@ import launch.substitutions
 def _build_ai_library_path(ai_python: str) -> str:
     paths = []
 
-    configured_path = os.environ.get('SOCIALNAV_AI_RUNTIME_LIBRARY_PATH', '')
+    configured_path = os.environ.get('ARENA_AI_RUNTIME_LIBRARY_PATH', '')
     if configured_path:
         paths.extend(configured_path.split(':'))
 
@@ -104,26 +104,7 @@ def generate_launch_description():
         }.items(),
     )
 
-    # ---- SocialNav / UrbanNav paths ----
-    social_nav_root = next(
-        (
-            candidate
-            for candidate in (
-                os.path.join(workspace_dir, 'src', 'arena-social-nav'),
-                os.path.join(workspace_dir, 'src', 'social-nav'),
-            )
-            if os.path.exists(candidate)
-        ),
-        os.path.join(workspace_dir, 'src', 'arena-social-nav'),
-    )
-    socialnav_bridge_script = os.path.join(
-        social_nav_root,
-        'ros2_nodes',
-        'socialnav',
-        'human_states_bridge.py',
-    )
-
-    ai_python = os.environ.get('SOCIALNAV_AI_PYTHON', 'python3')
+    ai_python = os.environ.get('ARENA_AI_PYTHON', 'python3')
     ai_process_env = {
         'PYTHONUNBUFFERED': '1',
         'RCUTILS_LOGGING_BUFFERED_STREAM': '0',
@@ -131,7 +112,7 @@ def generate_launch_description():
     ai_cuda_visible_devices = os.environ.get('AI_CUDA_VISIBLE_DEVICES', '').strip()
     if ai_cuda_visible_devices:
         ai_process_env['CUDA_VISIBLE_DEVICES'] = ai_cuda_visible_devices
-    ai_python_no_user_site = os.environ.get('SOCIALNAV_AI_PYTHONNOUSERSITE', '1')
+    ai_python_no_user_site = os.environ.get('ARENA_AI_PYTHONNOUSERSITE', '1')
     if ai_python_no_user_site:
         ai_process_env['PYTHONNOUSERSITE'] = ai_python_no_user_site
     ai_library_path = _build_ai_library_path(ai_python)
@@ -196,11 +177,12 @@ def generate_launch_description():
         ),
     )
 
-    # ---- Social AI bridge (human detection) ----
+    # ---- Arena AI bridge (human detection) ----
     socialnav_bridge = launch.actions.ExecuteProcess(
         cmd=[
-            'python3',
-            socialnav_bridge_script,
+            ai_python,
+            '-m',
+            'arena_ai_integration.nodes.human_states_bridge',
             '--ros-args',
             '-r',
             PythonExpression([

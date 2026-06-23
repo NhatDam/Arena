@@ -5,9 +5,8 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, ExecuteProcess
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import Node
 
 
 def generate_launch_description():
@@ -21,16 +20,24 @@ def generate_launch_description():
 
     agent_type = LaunchConfiguration('agent_type')
 
-    controller_node = Node(
-        package='arena_ai_integration',
-        executable='ai_controller',
-        name='ai_controller',
-        output='screen',
-        parameters=[
+    ai_python = os.environ.get('ARENA_AI_PYTHON', 'python3')
+
+    controller_node = ExecuteProcess(
+        cmd=[
+            ai_python,
+            '-m',
+            'arena_ai_integration.nodes.ai_controller_node',
+            '--ros-args',
+            '-r',
+            '__node:=ai_controller',
+            '-p',
+            ['agent_type:=', agent_type],
+            '--params-file',
             os.path.join(pkg_share, 'config', 'base_params.yaml'),
+            '--params-file',
             LaunchConfiguration('params_file'),
-            {'agent_type': agent_type},
         ],
+        output='screen',
     )
 
     params_file_arg = DeclareLaunchArgument(

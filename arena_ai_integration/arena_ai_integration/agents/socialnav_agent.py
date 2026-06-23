@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sys
 import traceback
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -10,27 +9,6 @@ from typing import List, Optional, Tuple
 import numpy as np
 
 from arena_ai_integration.agents.base_agent import AgentConfig, BaseAgent, PredictionContext
-
-
-def _social_nav_root() -> Path:
-    workspace = BaseAgent.workspace_dir()
-    for candidate in (
-        workspace / 'src' / 'arena-social-nav',
-        workspace / 'src' / 'social-nav',
-    ):
-        if candidate.exists():
-            return candidate
-    return workspace / 'src' / 'arena-social-nav'
-
-
-def _ensure_social_nav_path(subdir: str) -> None:
-    social_nav_root = _social_nav_root()
-    root = str(social_nav_root / 'ros2_nodes' / subdir)
-    if root not in sys.path:
-        sys.path.insert(0, root)
-    repo = str(social_nav_root)
-    if repo not in sys.path:
-        sys.path.insert(0, repo)
 
 
 class SocialNavAgent(BaseAgent):
@@ -54,8 +32,7 @@ class SocialNavAgent(BaseAgent):
     def load(self, config_path: Path, checkpoint_path: Path, logger=None) -> bool:
         try:
             import torch
-            _ensure_social_nav_path('socialnav')
-            from socialnav_ros2_node import SocialNavModel
+            from arena_ai_integration.models.socialnav.runtime import SocialNavModel
 
             self._device = 'cuda' if torch.cuda.is_available() else 'cpu'
             self._model = SocialNavModel(

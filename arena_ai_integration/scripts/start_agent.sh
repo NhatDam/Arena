@@ -8,7 +8,6 @@ ENABLE_VISUALIZATION="${ENABLE_VISUALIZATION:-true}"
 TRAIN_MODE="${TRAIN_MODE:-false}"
 
 AI_INTEGRATION_DIR="$WORKSPACE_DIR/src/Arena/arena_ai_integration"
-SOCIAL_NAV_DIR="$WORKSPACE_DIR/src/arena-social-nav"
 
 case "$AGENT_TYPE" in
   socialnav)
@@ -64,7 +63,7 @@ fi
 
 if [ "$AGENT_TYPE" = "socialnav" ]; then
     echo "[INFO] Starting Human States Bridge..."
-    python3 "$SOCIAL_NAV_DIR/ros2_nodes/socialnav/human_states_bridge.py" &
+    python3 -m arena_ai_integration.nodes.human_states_bridge &
     sleep 1
 fi
 
@@ -83,7 +82,7 @@ sleep 12
 
 if [ "$AGENT_TYPE" = "socialnav" ]; then
     echo "[INFO] Starting Semantic Laser Filter..."
-    python3 "$SOCIAL_NAV_DIR/ros2_nodes/socialnav/semantic_laser_filter.py" --ros-args -p use_sim_time:=true &
+    python3 -m arena_ai_integration.nodes.semantic_laser_filter --ros-args -p use_sim_time:=true &
     sleep 1
 fi
 
@@ -100,10 +99,6 @@ ros2 launch arena_ai_integration ai_controller.launch.py \
     -p enable_bev_visualization:="$ENABLE_VISUALIZATION" &
 
 sleep 3
-
-if [ -f "$SOCIAL_NAV_DIR/ros2_nodes/urbannav/arena_urbannav_bridge.py" ]; then
-    python3 "$SOCIAL_NAV_DIR/ros2_nodes/urbannav/arena_urbannav_bridge.py" &
-fi
 
 if [ "$ENABLE_VISUALIZATION" = "true" ]; then
     RVIZ_CONFIG="$WORKSPACE_DIR/src/Arena/arena_bringup/config/default.rviz"
