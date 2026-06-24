@@ -68,6 +68,14 @@ source install/setup.bash
 Standalone controller:
 
 ```bash
+sudo sysctl -w fs.inotify.max_user_watches=524288
+sudo sysctl -w fs.inotify.max_user_instances=1024
+sudo sysctl -w fs.inotify.max_queued_events=32768
+
+source /opt/ros/humble/setup.bash && source ~/arena5_ws/install/setup.bash && conda activate socialnav && export ISAAC_PATH=$HOME/isaacsim-4.2.0
+
+ARENA_AI_PYTHONNOUSERSITE=1 ARENA_HEADLESS=1 RESTART_STACK_EACH_EPISODE=0 FORCE_COLOR=1 bash ./src/Arena/arena_ai_integration/scripts/start_benchmark.sh
+
 AGENT_TYPE=socialnav ./src/Arena/arena_ai_integration/scripts/start_agent.sh
 AGENT_TYPE=urbannav ./src/Arena/arena_ai_integration/scripts/start_agent.sh
 AGENT_TYPE=lelan ./src/Arena/arena_ai_integration/scripts/start_agent.sh

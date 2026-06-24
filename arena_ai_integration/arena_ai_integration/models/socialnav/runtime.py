@@ -42,6 +42,30 @@ URBANNAV_MODELS = {
 }
 
 
+def _ensure_rgb_uint8_image(image) -> np.ndarray:
+    """Return a contiguous HxWx3 uint8 numpy image for OpenCV/Torch."""
+    arr = np.asarray(image)
+    if arr.ndim == 2:
+        arr = np.repeat(arr[:, :, None], 3, axis=2)
+    elif arr.ndim == 3:
+        if arr.shape[0] in (1, 3, 4) and arr.shape[-1] not in (1, 3, 4):
+            arr = np.moveaxis(arr, 0, -1)
+        if arr.shape[2] == 4:
+            arr = arr[:, :, :3]
+        elif arr.shape[2] == 1:
+            arr = np.repeat(arr, 3, axis=2)
+
+    if arr.ndim != 3 or arr.shape[2] != 3:
+        raise ValueError(
+            f"Expected image convertible to HxWx3 array, got type={type(image).__name__} "
+            f"shape={getattr(arr, 'shape', None)} dtype={getattr(arr, 'dtype', None)}"
+        )
+
+    if arr.dtype != np.uint8:
+        arr = arr.astype(np.uint8, copy=False)
+    return np.ascontiguousarray(arr)
+
+
 def _load_state_dict(checkpoint: str) -> dict:
     try:
         return torch.load(checkpoint, map_location=torch.device('cpu'), weights_only=True)
@@ -149,6 +173,7 @@ class UrbanNavModel:
         return text_features
 
     def encode_image(self, image: np.ndarray) -> torch.Tensor:
+        image = _ensure_rgb_uint8_image(image)
         h, w = image.shape[:2]
         new_h = max(14, (h // 14) * 14)
         new_w = max(14, (w // 14) * 14)
@@ -176,7 +201,7 @@ class UrbanNavModel:
             visual_feats = torch.cat(visual_feats, dim=0)
             text_feat = self.encode_instruction(instruction)
 
-            curr_img = cv2.resize(image_history[-1].copy(), (256, 256))
+            curr_img = cv2.resize(_ensure_rgb_uint8_image(image_history[-1]), (256, 256))
             curr_obs_img = torch.from_numpy(curr_img).float().to(self.device)
             curr_obs_img = curr_obs_img / 255.0
             curr_obs_img = curr_obs_img.permute(2, 0, 1).unsqueeze(0)
@@ -268,6 +293,7 @@ class SocialNavModel:
         return text_features
 
     def encode_image(self, image: np.ndarray) -> torch.Tensor:
+        image = _ensure_rgb_uint8_image(image)
         h, w = image.shape[:2]
         new_h = max(14, (h // 14) * 14)
         new_w = max(14, (w // 14) * 14)
@@ -297,7 +323,7 @@ class SocialNavModel:
             visual_feats = torch.cat(visual_feats, dim=0)
             text_feat = self.encode_instruction(instruction)
 
-            curr_img = cv2.resize(image_history[-1].copy(), (256, 256))
+            curr_img = cv2.resize(_ensure_rgb_uint8_image(image_history[-1]), (256, 256))
             curr_obs_img = torch.from_numpy(curr_img).float().to(self.device)
             curr_obs_img = curr_obs_img / 255.0
             curr_obs_img = curr_obs_img.permute(2, 0, 1).unsqueeze(0)

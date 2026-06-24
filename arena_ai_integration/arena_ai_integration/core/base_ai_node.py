@@ -17,7 +17,6 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
 import rclpy
-from cv_bridge import CvBridge
 from dwb_msgs.msg import LocalPlanEvaluation
 from geometry_msgs.msg import PoseStamped, TransformStamped, Twist
 from nav2_msgs.action import ComputePathToPose, FollowPath
@@ -40,7 +39,6 @@ from std_srvs.srv import Empty
 from tf2_ros import Buffer, TransformBroadcaster, TransformListener
 
 from arena_ai_integration.agents.base_agent import BaseAgent, PredictionContext
-from arena_ai_integration.core.bev_visualizer import BEVVisualizer
 from arena_ai_integration.core.human_tracker import HumanPositionTracker
 
 try:
@@ -311,9 +309,6 @@ class BaseAINode(Node):
             history_length=self.history_length,
             max_humans=self.max_humans
         )
-        self.cv_bridge = CvBridge()
-        self.bev_visualizer = BEVVisualizer(self.cv_bridge)
-
         # State
         self.image_history       = deque(maxlen=self.history_length)
         self._image_lock         = threading.Lock()
@@ -441,12 +436,74 @@ class BaseAINode(Node):
 
     # ──────────────────────────── Callbacks ────────────────────────────
 
+    def _image_msg_to_rgb_array(self, msg: Image) -> np.ndarray:
+        """Convert a ROS Image to contiguous RGB uint8 without cv_bridge."""
+        encoding = (msg.encoding or "").lower()
+        channel_counts = {
+            "rgb8": 3,
+            "bgr8": 3,
+            "rgba8": 4,
+            "bgra8": 4,
+            "mono8": 1,
+            "8uc1": 1,
+            "8uc3": 3,
+            "8uc4": 4,
+        }
+        channels = channel_counts.get(encoding)
+        if channels is None:
+            raise ValueError(f"Unsupported image encoding '{msg.encoding}'")
+
+        row_width = int(msg.width) * channels
+        step = int(msg.step) if msg.step else row_width
+        if step < row_width:
+            raise ValueError(
+                f"Invalid image step={step} for width={msg.width}, channels={channels}"
+            )
+
+        raw = np.frombuffer(msg.data, dtype=np.uint8)
+        needed = int(msg.height) * step
+        if raw.size < needed:
+            raise ValueError(
+                f"Image data too short: got {raw.size} bytes, expected at least {needed}"
+            )
+
+        rows = raw[:needed].reshape((int(msg.height), step))
+        arr = rows[:, :row_width].reshape((int(msg.height), int(msg.width), channels))
+
+        if encoding in ("mono8", "8uc1"):
+            arr = np.repeat(arr, 3, axis=2)
+        elif encoding in ("bgr8",):
+            arr = arr[:, :, ::-1]
+        elif encoding in ("rgba8", "8uc4"):
+            arr = arr[:, :, :3]
+        elif encoding == "bgra8":
+            arr = arr[:, :, :3][:, :, ::-1]
+
+        return np.ascontiguousarray(arr, dtype=np.uint8)
+
+    def _rgb_array_to_image_msg(self, image: np.ndarray) -> Image:
+        """Convert contiguous RGB uint8 image to sensor_msgs/Image without cv_bridge."""
+        arr = np.asarray(image)
+        if arr.ndim != 3 or arr.shape[2] != 3:
+            raise ValueError(f"Expected HxWx3 RGB image, got shape={arr.shape}")
+        if arr.dtype != np.uint8:
+            arr = arr.astype(np.uint8, copy=False)
+        arr = np.ascontiguousarray(arr)
+
+        msg = Image()
+        msg.height = int(arr.shape[0])
+        msg.width = int(arr.shape[1])
+        msg.encoding = "rgb8"
+        msg.is_bigendian = 0
+        msg.step = int(arr.shape[1] * 3)
+        msg.data = arr.tobytes()
+        return msg
+
     def image_callback(self, msg):
         try:
-            img = self.cv_bridge.imgmsg_to_cv2(msg, desired_encoding='rgb8')
-            # img = cv.resize(img, (224, 224), interpolation=cv.INTER_LINEAR)
+            img = self._image_msg_to_rgb_array(msg)
             with self._image_lock:
-                self.image_history.append(img)
+                self.image_history.append(img.copy())
             self.last_image_time = self.get_clock().now()
         except Exception as exc:
             self.get_logger().warn(
@@ -1951,7 +2008,7 @@ class BaseAINode(Node):
                 img_np = np.asarray(fig.canvas.buffer_rgba())[:, :, :3].copy()
             plt.close(fig)
 
-            img_msg = self.cv_bridge.cv2_to_imgmsg(img_np, encoding="rgb8")
+            img_msg = self._rgb_array_to_image_msg(img_np)
             img_msg.header.stamp = self.get_clock().now().to_msg()
             img_msg.header.frame_id = self.robot_frame
             self.viz_pub.publish(img_msg)
@@ -2197,7 +2254,7 @@ class BaseAINode(Node):
                 img_np = np.asarray(fig.canvas.buffer_rgba())[:, :, :3].copy()
             plt.close(fig)
 
-            img_msg = self.cv_bridge.cv2_to_imgmsg(img_np, encoding="rgb8")
+            img_msg = self._rgb_array_to_image_msg(img_np)
             img_msg.header.stamp = self.get_clock().now().to_msg()
             img_msg.header.frame_id = self.robot_frame
             self.viz_pub.publish(img_msg)
