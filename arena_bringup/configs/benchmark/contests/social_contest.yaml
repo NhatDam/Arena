@@ -1,11 +1,11 @@
 contestants:
 
   # ---- SocialNav ----
-  - name: SocialNav_1_path
-    local_planner: dwb
-    inter_planner: navigate_w_replanning_time
-    agent_name: SocialNav_1_path
-    goal_tolerance_radius: 2.5
+  # - name: SocialNav_1_path
+  #   local_planner: dwb
+  #   inter_planner: navigate_w_replanning_time
+  #   agent_name: SocialNav_1_path
+  #   goal_tolerance_radius: 2.5
 
   # ---- Urban Navigation (UrbanNav FiLM) ----
   # - name: UrbanNav_FiLM
@@ -22,11 +22,11 @@ contestants:
   #   goal_tolerance_radius: 2.5
 
   # # ---- Baseline DWB (non-AI) ----
-  # - name: DWB_Baseline
-  #   local_planner: dwb
-  #   inter_planner: navigate_w_replanning_time
-  #   agent_name: ""
-  #   goal_tolerance_radius: 2.5
+  - name: DWB_Baseline
+    local_planner: dwb
+    inter_planner: navigate_w_replanning_time
+    agent_name: ""
+    goal_tolerance_radius: 2.5
 
   # # ---- CityWalker ----
   # - name: CityWalker-v1

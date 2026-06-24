@@ -536,21 +536,20 @@ class Mod_Benchmark(TM_Module):
         """Call hunav_start_recording service (non-blocking fire-and-forget)."""
         logger = self._logger
 
-        # --- ĐOẠN CODE CẦN THÊM ---
+        timeout_sec = float(os.environ.get("ARENA_HUNAV_SERVICE_TIMEOUT_SEC", "15") or 15)
         is_ready = self._hunav_start_client.service_is_ready()
-        logger.info(f"[Benchmark] Hunav start service ready status: {is_ready}")
-        
         if not is_ready:
-            # In ra namespace hiện tại để debug xem có khớp với namespace của evaluator không
+            logger.info(
+                f"[Benchmark] Waiting up to {timeout_sec:.1f}s for /hunav_start_recording"
+            )
+            is_ready = self._hunav_start_client.wait_for_service(timeout_sec=timeout_sec)
+        logger.info(f"[Benchmark] Hunav start service ready status: {is_ready}")
+
+        if not is_ready:
             current_ns = self.node.get_namespace()
             logger.warning("[Benchmark] hunav_start_recording service NOT available!")
             logger.warning(f"[Benchmark] Current node namespace: {current_ns}")
             logger.warning("[Benchmark] Ensure 'hunav_evaluator_node' is running in root namespace '/'")
-            return
-        # ---------------------------
-
-        if not self._hunav_start_client.service_is_ready():
-            logger.warning("[Benchmark] hunav_start_recording service not available - metrics will NOT be recorded")
             return
 
         contest_cfg = self._contest.config(self._contest_index)
@@ -607,8 +606,15 @@ class Mod_Benchmark(TM_Module):
         self._hunav_recording = False
 
         if not self._hunav_stop_client.service_is_ready():
-            logger.warning("[Benchmark] hunav_stop_recording service not available")
-            return
+            stop_timeout_sec = float(
+                os.environ.get("ARENA_HUNAV_STOP_SERVICE_TIMEOUT_SEC", "3") or 3
+            )
+            logger.info(
+                f"[Benchmark] Waiting up to {stop_timeout_sec:.1f}s for /hunav_stop_recording"
+            )
+            if not self._hunav_stop_client.wait_for_service(timeout_sec=stop_timeout_sec):
+                logger.warning("[Benchmark] hunav_stop_recording service not available")
+                return
 
         logger.info("[Benchmark] Requesting hunav stop recording")
         future = self._hunav_stop_client.call_async(Empty.Request())

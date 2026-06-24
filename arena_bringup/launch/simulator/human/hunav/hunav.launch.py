@@ -40,5 +40,9 @@ def generate_launch_description():
             name='hunav_evaluator_node',
             output='screen',
             parameters=[metrics_file],
+            remappings=[
+                ('human_states', [namespace.substitution, '/human_states']),
+                ('robot_states', [namespace.substitution, '/robot_states']),
+            ],
         ),
     ])
