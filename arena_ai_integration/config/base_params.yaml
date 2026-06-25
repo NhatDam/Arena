@@ -30,3 +30,6 @@
     flip_y_axis: true
     fallback_to_dwb: false
     ai_inference_fail_threshold: 3
+    use_dwb_hard_gate: false
+    dwb_hard_gate_radius: 0.25
+    dwb_hard_gate_regeneration_max_attempts: 3

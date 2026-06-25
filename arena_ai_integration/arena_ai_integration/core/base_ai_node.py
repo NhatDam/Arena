@@ -39,6 +39,7 @@ from std_srvs.srv import Empty
 from tf2_ros import Buffer, TransformBroadcaster, TransformListener
 
 from arena_ai_integration.agents.base_agent import BaseAgent, PredictionContext
+from arena_ai_integration.core.dwb_adapter import DWBHardGateAdapter
 from arena_ai_integration.core.human_tracker import HumanPositionTracker
 
 try:
@@ -137,6 +138,12 @@ class BaseAINode(Node):
                     description='Agent-specific waypoint coordinate conversion mode')),
                 ('waypoint_scale', float(agent.config.extra_params.get('waypoint_scale', 1.0)), ParameterDescriptor(
                     description='Optional agent-specific waypoint output scale')),
+                ('use_dwb_hard_gate', False, ParameterDescriptor(
+                    description='Use DWBHardGateAdapter to select a DWB candidate through the AI waypoint')),
+                ('dwb_hard_gate_radius', 0.25, ParameterDescriptor(
+                    description='Maximum distance in meters between a DWB candidate and the gated AI waypoint')),
+                ('dwb_hard_gate_regeneration_max_attempts', 3, ParameterDescriptor(
+                    description='Waypoint regeneration attempts before holding position in hard-gate mode')),
             ]
         )
 
@@ -258,6 +265,24 @@ class BaseAINode(Node):
         self.agent.config.extra_params['waypoint_scale'] = float(
             self.get_parameter('waypoint_scale').value
         )
+        self.use_dwb_hard_gate = bool(self.get_parameter('use_dwb_hard_gate').value)
+        self.dwb_hard_gate_radius = max(
+            0.0,
+            float(self.get_parameter('dwb_hard_gate_radius').value),
+        )
+        self.dwb_hard_gate_regeneration_max_attempts = max(
+            0,
+            int(self.get_parameter('dwb_hard_gate_regeneration_max_attempts').value),
+        )
+        self.dwb_hard_gate_adapter = None
+        if self.use_dwb_hard_gate:
+            self.dwb_hard_gate_adapter = DWBHardGateAdapter(
+                gate_waypoint_index=self.path_waypoint_index,
+                waypoint_gate_radius=self.dwb_hard_gate_radius,
+                regeneration_max_attempts=self.dwb_hard_gate_regeneration_max_attempts,
+                max_linear_vel=self.max_linear_vel,
+                max_angular_vel=self.max_angular_vel,
+            )
 
         self.image_topic = configured_image_topic or f'{self.robot_namespace}/rgbd_camera/image'
         self.odom_topic = f'{self.robot_namespace}/odom'
@@ -426,6 +451,7 @@ class BaseAINode(Node):
             f"local_goal_relock_mode={self.local_goal_relock_mode}, "
             f"rolling_final_radius={self.rolling_local_goal_final_radius:.2f}m, "
             f"rolling_relock_period={self.rolling_relock_period_sec:.2f}s, "
+            f"use_dwb_hard_gate={self.use_dwb_hard_gate}, "
             f"model_ready={self.model is not None})"
         )
 
@@ -529,6 +555,8 @@ class BaseAINode(Node):
         self.reset_in_progress = False
         self._ai_consecutive_failures = 0
         self._reset_phase_state()
+        if self.dwb_hard_gate_adapter is not None:
+            self.dwb_hard_gate_adapter.clear()
 
         self.get_logger().info(f"[INFO] New instruction received: {msg.data}. Waiting for goal_pose.")
 
@@ -673,6 +701,8 @@ class BaseAINode(Node):
         self.odom_history.clear()
         self._ai_consecutive_failures = 0
         self._reset_phase_state()
+        if self.dwb_hard_gate_adapter is not None:
+            self.dwb_hard_gate_adapter.clear()
         self.get_logger().info(
             "[INFO] Benchmark goal received; starting SocialNav DWB path-adapter episode."
         )
@@ -1753,6 +1783,14 @@ class BaseAINode(Node):
             return None
         return self._copy_twist(self.latest_dwb_cmd)
 
+    def _fresh_dwb_eval(self) -> LocalPlanEvaluation | None:
+        if self.latest_eval is None:
+            return None
+        eval_age = (self.get_clock().now() - self.last_eval_time).nanoseconds / 1e9
+        if eval_age > self.max_eval_staleness_sec:
+            return None
+        return self.latest_eval
+
     def _relay_dwb_raw_cmd(self, reason: str) -> bool:
         cmd = self._fresh_dwb_raw_cmd()
         if cmd is None:
@@ -1764,6 +1802,37 @@ class BaseAINode(Node):
             return False
 
         self.cmd_pub.publish(cmd)
+        return True
+
+    def _publish_dwb_hard_gate_cmd(self, waypoints: np.ndarray) -> bool:
+        if self.dwb_hard_gate_adapter is None:
+            return self._relay_dwb_raw_cmd("DWB hard gate disabled")
+
+        eval_msg = self._fresh_dwb_eval()
+        if eval_msg is None:
+            return self._relay_dwb_raw_cmd("DWB hard gate waiting for fresh LocalPlanEvaluation")
+
+        if self.current_odom is None:
+            return self._relay_dwb_raw_cmd("DWB hard gate waiting for odom")
+
+        cmd, selected_waypoints = self.dwb_hard_gate_adapter.select_best_candidate(
+            waypoints,
+            eval_msg,
+            self.current_odom,
+            logger=self.get_logger(),
+        )
+        self.latest_ai_waypoints = np.array(selected_waypoints, copy=True)
+        self._publish_path(selected_waypoints)
+        self.cmd_pub.publish(cmd)
+
+        wp_idx = self._path_waypoint_index(selected_waypoints)
+        wp = selected_waypoints[wp_idx] if wp_idx is not None else [0.0, 0.0]
+        self.get_logger().info(
+            "DWB hard gate command published: "
+            f"wp_idx={wp_idx} wp_local=({wp[0]:.2f},{wp[1]:.2f}) "
+            f"v={cmd.linear.x:.3f} w={cmd.angular.z:.3f}",
+            throttle_duration_sec=1.0,
+        )
         return True
 
     # ──────────────────────────── Main Loop ────────────────────────────
@@ -1913,7 +1982,10 @@ class BaseAINode(Node):
             #    phase 2 returns to the benchmark/global goal.
             self._maybe_update_phase_state(ros_waypoints)
             self._request_ai_path_update(ros_waypoints)
-            self._relay_dwb_raw_cmd("following AI-adapted DWB path")
+            if self.use_dwb_hard_gate:
+                self._publish_dwb_hard_gate_cmd(ros_waypoints)
+            else:
+                self._relay_dwb_raw_cmd("following AI-adapted DWB path")
 
             self.get_logger().info(
                 f"[INFO] AI path adapter: phase={self.path_phase} wp_idx={wp_idx} arrival={arrival_score:.3f} "

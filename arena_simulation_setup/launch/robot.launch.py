@@ -38,6 +38,11 @@ def _build_ai_library_path(ai_python: str) -> str:
     return ':'.join(valid)
 
 
+def _env_bool_text(name: str, default: str = 'false') -> str:
+    value = os.environ.get(name, default)
+    return 'true' if str(value).strip().lower() in ('1', 'true', 'yes', 'on') else 'false'
+
+
 def generate_launch_description():
 
     workspace_dir = os.environ.get('WORKSPACE_DIR', os.path.expanduser('~/arena5_ws'))
@@ -105,6 +110,7 @@ def generate_launch_description():
     )
 
     ai_python = os.environ.get('ARENA_AI_PYTHON', 'python3')
+    ai_dwb_hard_gate = _env_bool_text('ARENA_AI_DWB_HARD_GATE')
     ai_process_env = {
         'PYTHONUNBUFFERED': '1',
         'RCUTILS_LOGGING_BUFFERED_STREAM': '0',
@@ -248,6 +254,7 @@ def generate_launch_description():
             ]),
             '-p', 'fallback_to_dwb:=true',
             '-p', 'reset_on_eval_dropout:=false',
+            '-p', f'use_dwb_hard_gate:={ai_dwb_hard_gate}',
             '-p', 'initial_eval_wait_sec:=5.0',
             '-p', 'max_eval_staleness_sec:=5.0',
             '-p', 'startup_data_timeout_sec:=30.0',
