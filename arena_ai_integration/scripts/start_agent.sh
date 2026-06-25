@@ -6,6 +6,9 @@ AGENT_TYPE="${AGENT_TYPE:-socialnav}"
 ENABLE_HUMAN_TRACKING="${ENABLE_HUMAN_TRACKING:-true}"
 ENABLE_VISUALIZATION="${ENABLE_VISUALIZATION:-true}"
 TRAIN_MODE="${TRAIN_MODE:-false}"
+ARENA_AI_DWB_INTEGRATION="${ARENA_AI_DWB_INTEGRATION:-path_adapter}"
+ARENA_AI_DWB_HARD_GATE="${ARENA_AI_DWB_HARD_GATE:-false}"
+ARENA_AI_COORDINATE_MODE="${ARENA_AI_COORDINATE_MODE:-xz_to_ros}"
 
 AI_INTEGRATION_DIR="$WORKSPACE_DIR/src/Arena/arena_ai_integration"
 
@@ -96,7 +99,10 @@ ros2 launch arena_ai_integration ai_controller.launch.py \
     -p model_config_path:="$MODEL_CONFIG" \
     -p model_checkpoint_path:="$MODEL_CHECKPOINT" \
     -p enable_human_tracking:="$ENABLE_HUMAN_TRACKING" \
-    -p enable_bev_visualization:="$ENABLE_VISUALIZATION" &
+    -p enable_bev_visualization:="$ENABLE_VISUALIZATION" \
+    -p dwb_integration_mode:="$ARENA_AI_DWB_INTEGRATION" \
+    -p use_dwb_hard_gate:="$ARENA_AI_DWB_HARD_GATE" \
+    -p coordinate_mode:="$ARENA_AI_COORDINATE_MODE" &
 
 sleep 3
 

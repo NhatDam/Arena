@@ -138,6 +138,19 @@ class BaseAINode(Node):
                     description='Agent-specific waypoint coordinate conversion mode')),
                 ('waypoint_scale', float(agent.config.extra_params.get('waypoint_scale', 1.0)), ParameterDescriptor(
                     description='Optional agent-specific waypoint output scale')),
+                ('dwb_integration_mode', 'path_adapter', ParameterDescriptor(
+                    description='AI-DWB integration: none, path_adapter, shaped_path, or hard_gate')),
+                ('shaped_path_num_waypoints', 4, ParameterDescriptor(
+                    description='Number of leading AI waypoints inserted into the shaped FollowPath path')),
+                ('social_cost_hard_radius', 0.35, ParameterDescriptor()),
+                ('social_cost_personal_radius', 1.0, ParameterDescriptor()),
+                ('social_cost_social_radius', 1.5, ParameterDescriptor()),
+                ('social_cost_w_hard', 100.0, ParameterDescriptor()),
+                ('social_cost_w_personal', 5.0, ParameterDescriptor()),
+                ('social_cost_w_social', 1.0, ParameterDescriptor()),
+                ('social_cost_w_global', 0.25, ParameterDescriptor()),
+                ('social_cost_w_progress', 0.5, ParameterDescriptor()),
+                ('social_cost_w_smooth', 0.1, ParameterDescriptor()),
                 ('use_dwb_hard_gate', False, ParameterDescriptor(
                     description='Use DWBHardGateAdapter to select a DWB candidate through the AI waypoint')),
                 ('dwb_hard_gate_radius', 0.25, ParameterDescriptor(
@@ -265,7 +278,33 @@ class BaseAINode(Node):
         self.agent.config.extra_params['waypoint_scale'] = float(
             self.get_parameter('waypoint_scale').value
         )
+        self.dwb_integration_mode = str(
+            self.get_parameter('dwb_integration_mode').value
+        ).strip().lower()
         self.use_dwb_hard_gate = bool(self.get_parameter('use_dwb_hard_gate').value)
+        if self.use_dwb_hard_gate:
+            self.dwb_integration_mode = 'hard_gate'
+        valid_integration_modes = {'none', 'path_adapter', 'shaped_path', 'hard_gate'}
+        if self.dwb_integration_mode not in valid_integration_modes:
+            self.get_logger().warn(
+                f"Invalid dwb_integration_mode='{self.dwb_integration_mode}', "
+                "falling back to 'path_adapter'."
+            )
+            self.dwb_integration_mode = 'path_adapter'
+        self.use_dwb_hard_gate = self.dwb_integration_mode == 'hard_gate'
+        self.shaped_path_num_waypoints = max(
+            1,
+            int(self.get_parameter('shaped_path_num_waypoints').value),
+        )
+        self.social_cost_hard_radius = max(0.01, float(self.get_parameter('social_cost_hard_radius').value))
+        self.social_cost_personal_radius = max(0.01, float(self.get_parameter('social_cost_personal_radius').value))
+        self.social_cost_social_radius = max(0.01, float(self.get_parameter('social_cost_social_radius').value))
+        self.social_cost_w_hard = float(self.get_parameter('social_cost_w_hard').value)
+        self.social_cost_w_personal = float(self.get_parameter('social_cost_w_personal').value)
+        self.social_cost_w_social = float(self.get_parameter('social_cost_w_social').value)
+        self.social_cost_w_global = float(self.get_parameter('social_cost_w_global').value)
+        self.social_cost_w_progress = float(self.get_parameter('social_cost_w_progress').value)
+        self.social_cost_w_smooth = float(self.get_parameter('social_cost_w_smooth').value)
         self.dwb_hard_gate_radius = max(
             0.0,
             float(self.get_parameter('dwb_hard_gate_radius').value),
@@ -451,6 +490,7 @@ class BaseAINode(Node):
             f"local_goal_relock_mode={self.local_goal_relock_mode}, "
             f"rolling_final_radius={self.rolling_local_goal_final_radius:.2f}m, "
             f"rolling_relock_period={self.rolling_relock_period_sec:.2f}s, "
+            f"dwb_integration_mode={self.dwb_integration_mode}, "
             f"use_dwb_hard_gate={self.use_dwb_hard_gate}, "
             f"model_ready={self.model is not None})"
         )
@@ -1456,7 +1496,208 @@ class BaseAINode(Node):
             yaw = math.atan2(y1 - y0, x1 - x0)
             self._set_yaw(path.poses[idx].pose, yaw)
 
+    def _goal_to_local(self) -> tuple[float, float] | None:
+        if self.current_goal is None:
+            return None
+        return self._point_in_frame_to_local(
+            self.current_goal.pose.position.x,
+            self.current_goal.pose.position.y,
+            self.current_goal.header.frame_id,
+        )
+
+    def _append_pose_if_distinct(
+        self,
+        path: NavPath,
+        x: float,
+        y: float,
+        yaw: float,
+        stamp,
+        min_distance: float = 0.05,
+    ) -> bool:
+        if path.poses:
+            px, py = self._pose_xy(path.poses[-1])
+            if math.hypot(float(x) - px, float(y) - py) < min_distance:
+                return False
+        path.poses.append(self._pose_stamped(path.header.frame_id, x, y, yaw, stamp))
+        return True
+
+    def _select_ai_candidate(
+        self,
+        candidates: np.ndarray,
+        arrival_scores: np.ndarray | None,
+        human_positions: np.ndarray | None,
+        human_mask: np.ndarray | None,
+    ) -> tuple[np.ndarray, int, float, float]:
+        arr = np.asarray(candidates, dtype=np.float32)
+        if arr.ndim == 2:
+            arr = arr[None, :, :]
+        if arr.ndim != 3 or arr.shape[-1] < 2 or arr.shape[0] == 0:
+            raise ValueError(f"Expected AI candidates shape [K,T,2], got {arr.shape}")
+        arr = arr[:, :, :2]
+
+        if self.dwb_integration_mode not in ('shaped_path', 'hard_gate') or arr.shape[0] == 1:
+            return arr[0], 0, 0.0, float('nan')
+
+        humans = None
+        if human_positions is not None:
+            humans = np.asarray(human_positions, dtype=np.float32)
+            if human_mask is not None and humans.ndim == 3:
+                mask = np.asarray(human_mask, dtype=bool)
+                if mask.shape == humans.shape[:2]:
+                    valid_points = []
+                    for t_idx in range(humans.shape[0]):
+                        valid = humans[t_idx, ~mask[t_idx], :2]
+                        if len(valid) > 0:
+                            valid_points.append(valid)
+                    humans = np.concatenate(valid_points, axis=0) if valid_points else None
+            elif humans.ndim == 3:
+                humans = humans.reshape(-1, humans.shape[-1])[:, :2]
+            if humans is not None and len(humans) == 0:
+                humans = None
+
+        global_path_local = self._path_to_local_array(self.latest_global_path, max_points=200)
+        goal_local = self._goal_to_local()
+        scores = []
+        min_human_dists = []
+        for cand in arr:
+            cost = 0.0
+            min_human_dist = float('inf')
+            if humans is not None and len(humans) > 0:
+                dists = np.linalg.norm(cand[:, None, :] - humans[None, :, :], axis=2)
+                min_per_wp = np.min(dists, axis=1)
+                min_human_dist = float(np.min(min_per_wp))
+                cost += self.social_cost_w_hard * float(np.count_nonzero(min_per_wp < self.social_cost_hard_radius))
+                personal_penalty = np.maximum(0.0, self.social_cost_personal_radius - min_per_wp) ** 2
+                cost += self.social_cost_w_personal * float(np.sum(personal_penalty))
+                cost += self.social_cost_w_social * float(
+                    np.sum(np.exp(-(min_per_wp ** 2) / (self.social_cost_social_radius ** 2)))
+                )
+
+            if global_path_local is not None and len(global_path_local) > 0:
+                d_global = np.linalg.norm(cand[:, None, :] - global_path_local[None, :, :], axis=2)
+                cost += self.social_cost_w_global * float(np.mean(np.min(d_global, axis=1)))
+
+            if len(cand) > 0:
+                progress_idx = min(self.shaped_path_num_waypoints - 1, len(cand) - 1)
+                if goal_local is not None:
+                    start_goal_dist = math.hypot(goal_local[0], goal_local[1])
+                    end_goal_dist = math.hypot(goal_local[0] - cand[progress_idx, 0], goal_local[1] - cand[progress_idx, 1])
+                    progress = start_goal_dist - end_goal_dist
+                else:
+                    progress = float(np.linalg.norm(cand[progress_idx]))
+                cost -= self.social_cost_w_progress * progress
+
+            if len(cand) >= 3:
+                second_diff = cand[2:] - 2.0 * cand[1:-1] + cand[:-2]
+                cost += self.social_cost_w_smooth * float(np.sum(np.linalg.norm(second_diff, axis=1)))
+
+            scores.append(cost)
+            min_human_dists.append(min_human_dist)
+
+        best_idx = int(np.argmin(np.asarray(scores, dtype=np.float32)))
+        best_score = float(scores[best_idx])
+        best_min_human_dist = float(min_human_dists[best_idx])
+        self.get_logger().info(
+            "AI candidate selection: "
+            f"mode={self.dwb_integration_mode} best_k={best_idx} "
+            f"score={best_score:.3f} min_human_dist={best_min_human_dist:.3f}",
+            throttle_duration_sec=1.0,
+        )
+        return arr[best_idx], best_idx, best_score, best_min_human_dist
+
+    def _build_ai_shaped_path(self, global_path: NavPath | None, waypoints: np.ndarray) -> NavPath | None:
+        if self.current_goal is None:
+            return None
+
+        path_frame = ''
+        if global_path is not None:
+            path_frame = self._frame_name(global_path.header.frame_id)
+        if not path_frame:
+            path_frame = self._frame_name(self.current_goal.header.frame_id)
+        if not path_frame:
+            path_frame = self._odom_frame()
+
+        robot_pose = self._robot_pose_in_frame(path_frame)
+        if robot_pose is None:
+            return None
+
+        stamp = self.get_clock().now().to_msg()
+        path = NavPath()
+        path.header.stamp = stamp
+        path.header.frame_id = path_frame
+
+        rx, ry, ryaw = robot_pose
+        path.poses.append(self._pose_stamped(path_frame, rx, ry, ryaw, stamp))
+
+        arr = np.asarray(waypoints, dtype=np.float32)
+        if arr.ndim != 2 or arr.shape[1] < 2 or len(arr) == 0:
+            return None
+
+        last_ai_xy = None
+        for waypoint in arr[:self.shaped_path_num_waypoints]:
+            xy = self._local_waypoint_to_frame(waypoint[:2], path_frame)
+            if xy is None:
+                continue
+            last_ai_xy = xy
+            self._append_pose_if_distinct(path, xy[0], xy[1], ryaw, stamp)
+
+        goal_pose = self._goal_pose_in_frame(path_frame, stamp)
+        if goal_pose is None:
+            return None
+
+        if last_ai_xy is not None and global_path is not None and global_path.poses:
+            nearest_idx = self._nearest_path_index(global_path, last_ai_xy[0], last_ai_xy[1])
+            tail_start, actual_skip = self._advance_path_index_by_distance(
+                global_path,
+                max(1, nearest_idx) if len(global_path.poses) > 1 else nearest_idx,
+                self.ai_rejoin_skip_distance,
+            )
+            self.get_logger().info(
+                "AI shaped path rejoin: "
+                f"nearest_idx={nearest_idx} rejoin_idx={tail_start} "
+                f"skip={actual_skip:.2f}m target={self.ai_rejoin_skip_distance:.2f}m "
+                f"ai_wps={min(self.shaped_path_num_waypoints, len(arr))} global_poses={len(global_path.poses)}",
+                throttle_duration_sec=1.0,
+            )
+            for pose in global_path.poses[tail_start:]:
+                tail_pose = copy.deepcopy(pose)
+                tail_pose.header.stamp = path.header.stamp
+                tail_pose.header.frame_id = path_frame
+                path.poses.append(tail_pose)
+        else:
+            start_xy = last_ai_xy if last_ai_xy is not None else (rx, ry)
+            dist = math.hypot(
+                goal_pose.pose.position.x - start_xy[0],
+                goal_pose.pose.position.y - start_xy[1],
+            )
+            n_interp = max(3, int(dist / 0.5)) if dist > 0.3 else 1
+            for idx in range(1, n_interp + 1):
+                alpha = float(idx) / float(n_interp)
+                x = start_xy[0] * (1.0 - alpha) + goal_pose.pose.position.x * alpha
+                y = start_xy[1] * (1.0 - alpha) + goal_pose.pose.position.y * alpha
+                self._append_pose_if_distinct(path, x, y, ryaw, stamp)
+
+        if math.hypot(
+            path.poses[-1].pose.position.x - goal_pose.pose.position.x,
+            path.poses[-1].pose.position.y - goal_pose.pose.position.y,
+        ) > 0.05:
+            path.poses.append(goal_pose)
+        else:
+            path.poses[-1].pose.orientation = goal_pose.pose.orientation
+
+        self._set_intermediate_orientations(path)
+        self.get_logger().info(
+            "AI shaped FollowPath: "
+            f"poses={len(path.poses)} ai_wps={min(self.shaped_path_num_waypoints, len(arr))} "
+            f"frame={path_frame}",
+            throttle_duration_sec=1.0,
+        )
+        return path
+
     def _build_ai_adapted_path(self, global_path: NavPath | None, waypoints: np.ndarray) -> NavPath | None:
+        if self.dwb_integration_mode == 'shaped_path':
+            return self._build_ai_shaped_path(global_path, waypoints)
+
         if self.current_goal is None:
             return None
 
@@ -1611,7 +1852,7 @@ class BaseAINode(Node):
         now = self.get_clock().now()
         self.last_path_request_time = now
 
-        if self._phase_local_goal_active():
+        if self._phase_local_goal_active() and self.dwb_integration_mode != 'shaped_path':
             self.path_request_in_progress = False
             self._send_ai_follow_path(None, self.latest_ai_waypoints)
             return
@@ -1929,7 +2170,7 @@ class BaseAINode(Node):
                 ego_hist_xy=ego_hist_np,
                 cuda_stream=self._cuda_stream,
             )
-            waypoints, arrival_score = self.model.predict(
+            candidates, arrival_scores = self.model.predict_candidates(
                 images_snapshot,
                 self.current_instruction,
                 pred_context,
@@ -1941,15 +2182,22 @@ class BaseAINode(Node):
                     f"radius={self.human_context_radius:.1f}m\033[0m",
                     throttle_duration_sec=1.0,
                 )
-            wp_idx = self._path_waypoint_index(waypoints)
+            ros_candidates = self.agent.to_ros_candidates(candidates)
+            ros_waypoints, best_k, best_cost, best_min_human_dist = self._select_ai_candidate(
+                ros_candidates,
+                arrival_scores,
+                human_positions,
+                human_mask,
+            )
+            arrival_arr = np.asarray(arrival_scores, dtype=np.float32).reshape(-1)
+            arrival_score = float(arrival_arr[min(best_k, len(arrival_arr) - 1)]) if len(arrival_arr) else 0.0
+
+            wp_idx = self._path_waypoint_index(ros_waypoints)
             if wp_idx is not None:
                 self.get_logger().info(
-                    f"Raw model waypoint[{wp_idx}] Y: {waypoints[wp_idx, 1]:.3f}",
+                    f"Selected AI waypoint[{wp_idx}] Y: {ros_waypoints[wp_idx, 1]:.3f}",
                     throttle_duration_sec=1.0,
                 )
-
-            # 4. Chuyển đổi trục: model output → ROS local frame
-            ros_waypoints = self.agent.to_ros_waypoints(waypoints)
 
             # Inference thành công → reset bộ đếm lỗi
             self._ai_consecutive_failures = 0
@@ -1980,17 +2228,25 @@ class BaseAINode(Node):
 
             # 7. State machine: phase 1 chases the selected AI waypoint,
             #    phase 2 returns to the benchmark/global goal.
-            self._maybe_update_phase_state(ros_waypoints)
-            self._request_ai_path_update(ros_waypoints)
-            if self.use_dwb_hard_gate:
-                self._publish_dwb_hard_gate_cmd(ros_waypoints)
+            if self.dwb_integration_mode == 'none':
+                self._relay_dwb_raw_cmd("AI integration mode is none")
+            elif self.dwb_integration_mode == 'shaped_path':
+                self._request_ai_path_update(ros_waypoints)
+                self._relay_dwb_raw_cmd("following AI shaped DWB path")
             else:
-                self._relay_dwb_raw_cmd("following AI-adapted DWB path")
+                self._maybe_update_phase_state(ros_waypoints)
+                self._request_ai_path_update(ros_waypoints)
+                if self.use_dwb_hard_gate:
+                    self._publish_dwb_hard_gate_cmd(ros_waypoints)
+                else:
+                    self._relay_dwb_raw_cmd("following AI-adapted DWB path")
 
             self.get_logger().info(
-                f"[INFO] AI path adapter: phase={self.path_phase} wp_idx={wp_idx} arrival={arrival_score:.3f} "
+                f"[INFO] AI path adapter: mode={self.dwb_integration_mode} phase={self.path_phase} "
+                f"best_k={best_k} wp_idx={wp_idx} arrival={arrival_score:.3f} cost={best_cost:.3f} "
                 f"dist_to_benchmark={dist_to_goal:.2f}m" if dist_to_goal is not None else
-                f"[INFO] AI path adapter: phase={self.path_phase} wp_idx={wp_idx} arrival={arrival_score:.3f}",
+                f"[INFO] AI path adapter: mode={self.dwb_integration_mode} phase={self.path_phase} "
+                f"best_k={best_k} wp_idx={wp_idx} arrival={arrival_score:.3f} cost={best_cost:.3f}",
                 throttle_duration_sec=1.0,
             )
 

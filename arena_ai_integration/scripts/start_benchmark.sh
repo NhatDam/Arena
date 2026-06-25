@@ -111,8 +111,10 @@ BENCHMARK_RUN_ID="${BENCHMARK_RUN_ID:-$(date +%s)}"
 export BENCHMARK_RUN_ID
 ISAAC_CUDA_VISIBLE_DEVICES="${ISAAC_CUDA_VISIBLE_DEVICES:-}"
 AI_CUDA_VISIBLE_DEVICES="${AI_CUDA_VISIBLE_DEVICES:-}"
+ARENA_AI_DWB_INTEGRATION="${ARENA_AI_DWB_INTEGRATION:-path_adapter}"
 ARENA_AI_DWB_HARD_GATE="${ARENA_AI_DWB_HARD_GATE:-false}"
-export ARENA_AI_DWB_HARD_GATE
+ARENA_AI_COORDINATE_MODE="${ARENA_AI_COORDINATE_MODE:-xz_to_ros}"
+export ARENA_AI_DWB_INTEGRATION ARENA_AI_DWB_HARD_GATE ARENA_AI_COORDINATE_MODE
 
 ros2_cli() {
     local -a clean_env=(
@@ -882,7 +884,11 @@ start_arena_process() {
         clean_env+=(AI_CUDA_VISIBLE_DEVICES="$AI_CUDA_VISIBLE_DEVICES")
     fi
 
-    clean_env+=(ARENA_AI_DWB_HARD_GATE="$ARENA_AI_DWB_HARD_GATE")
+    clean_env+=(
+        ARENA_AI_DWB_INTEGRATION="$ARENA_AI_DWB_INTEGRATION"
+        ARENA_AI_DWB_HARD_GATE="$ARENA_AI_DWB_HARD_GATE"
+        ARENA_AI_COORDINATE_MODE="$ARENA_AI_COORDINATE_MODE"
+    )
 
     if [ -n "${ARENA_BENCHMARK_CONFIG_DIR:-}" ]; then
         clean_env+=(ARENA_BENCHMARK_CONFIG_DIR="$ARENA_BENCHMARK_CONFIG_DIR")
@@ -916,7 +922,9 @@ start_arena_process() {
     else
         echo "[INFO] GPU routing: inherited CUDA_VISIBLE_DEVICES for both Isaac and AI."
     fi
+    echo "[INFO] Arena AI DWB integration: $ARENA_AI_DWB_INTEGRATION"
     echo "[INFO] Arena AI DWB hard gate: $ARENA_AI_DWB_HARD_GATE"
+    echo "[INFO] Arena AI coordinate mode: $ARENA_AI_COORDINATE_MODE"
     setsid "${clean_env[@]}" bash -c '
         source /opt/ros/humble/setup.bash
         source "$WORKSPACE_DIR/install/setup.bash"

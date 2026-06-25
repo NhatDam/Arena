@@ -308,14 +308,14 @@ class SocialNavModel:
             features = self.dinov2_model(img_tensor)
         return features
 
-    def predict(
+    def _forward(
         self,
         image_history: List[np.ndarray],
         instruction: str,
         human_positions: Optional[np.ndarray] = None,
         ego_hist_xy: Optional[np.ndarray] = None,
         human_mask: Optional[np.ndarray] = None,
-    ) -> Tuple[np.ndarray, float]:
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         assert len(image_history) == self.config['context_size']
 
         with torch.no_grad():
@@ -391,7 +391,43 @@ class SocialNavModel:
                 waypoints = output
                 arrival_logit = torch.zeros(1, dtype=torch.float32).to(self.device)
 
-            arrival_score = torch.sigmoid(arrival_logit[0, 0])
-            waypoints = waypoints[0, 0]
+            if waypoints.ndim == 3:
+                waypoints = waypoints.unsqueeze(1)
+            if arrival_logit.ndim == 1:
+                arrival_logit = arrival_logit.unsqueeze(0)
 
-        return waypoints.cpu().numpy(), arrival_score.cpu().item()
+        return waypoints[0], torch.sigmoid(arrival_logit[0])
+
+    def predict_candidates(
+        self,
+        image_history: List[np.ndarray],
+        instruction: str,
+        human_positions: Optional[np.ndarray] = None,
+        ego_hist_xy: Optional[np.ndarray] = None,
+        human_mask: Optional[np.ndarray] = None,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        waypoints, arrival_scores = self._forward(
+            image_history,
+            instruction,
+            human_positions=human_positions,
+            ego_hist_xy=ego_hist_xy,
+            human_mask=human_mask,
+        )
+        return waypoints.cpu().numpy(), arrival_scores.cpu().numpy()
+
+    def predict(
+        self,
+        image_history: List[np.ndarray],
+        instruction: str,
+        human_positions: Optional[np.ndarray] = None,
+        ego_hist_xy: Optional[np.ndarray] = None,
+        human_mask: Optional[np.ndarray] = None,
+    ) -> Tuple[np.ndarray, float]:
+        candidates, arrival_scores = self.predict_candidates(
+            image_history,
+            instruction,
+            human_positions=human_positions,
+            ego_hist_xy=ego_hist_xy,
+            human_mask=human_mask,
+        )
+        return candidates[0], float(arrival_scores[0])

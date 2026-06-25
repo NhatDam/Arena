@@ -111,6 +111,10 @@ def generate_launch_description():
 
     ai_python = os.environ.get('ARENA_AI_PYTHON', 'python3')
     ai_dwb_hard_gate = _env_bool_text('ARENA_AI_DWB_HARD_GATE')
+    ai_dwb_integration = os.environ.get('ARENA_AI_DWB_INTEGRATION', 'path_adapter').strip() or 'path_adapter'
+    if ai_dwb_hard_gate == 'true':
+        ai_dwb_integration = 'hard_gate'
+    ai_coordinate_mode = os.environ.get('ARENA_AI_COORDINATE_MODE', 'xz_to_ros').strip() or 'xz_to_ros'
     ai_process_env = {
         'PYTHONUNBUFFERED': '1',
         'RCUTILS_LOGGING_BUFFERED_STREAM': '0',
@@ -254,6 +258,7 @@ def generate_launch_description():
             ]),
             '-p', 'fallback_to_dwb:=true',
             '-p', 'reset_on_eval_dropout:=false',
+            '-p', f'dwb_integration_mode:={ai_dwb_integration}',
             '-p', f'use_dwb_hard_gate:={ai_dwb_hard_gate}',
             '-p', 'initial_eval_wait_sec:=5.0',
             '-p', 'max_eval_staleness_sec:=5.0',
@@ -275,7 +280,7 @@ def generate_launch_description():
             '-p', PythonExpression(['"image_topic:=', namespace.substitution, '/rgbd_camera/image"']),
             '-p', PythonExpression(['"dwb_cmd_topic:=', namespace.substitution, '/cmd_vel_nav_raw"']),
             '-p', 'instruction_topic:=/nav_instruction',
-            '-p', 'coordinate_mode:=xz_to_ros',
+            '-p', f'coordinate_mode:={ai_coordinate_mode}',
         ],
         output='screen',
         condition=IfCondition(

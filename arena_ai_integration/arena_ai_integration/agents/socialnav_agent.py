@@ -86,3 +86,38 @@ class SocialNavAgent(BaseAgent):
             )
 
         return waypoints, float(arrival_score)
+
+    def predict_candidates(
+        self,
+        image_history: List[np.ndarray],
+        instruction: str,
+        context: Optional[PredictionContext] = None,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        if self._model is None:
+            raise RuntimeError("SocialNav model is not loaded")
+
+        context = context or PredictionContext()
+        kwargs = {
+            'human_positions': context.human_positions,
+            'ego_hist_xy': context.ego_hist_xy,
+            'human_mask': context.human_mask,
+        }
+
+        import torch
+
+        if context.cuda_stream is not None:
+            with torch.cuda.stream(context.cuda_stream):
+                candidates, arrival_scores = self._model.predict_candidates(
+                    image_history,
+                    instruction,
+                    **kwargs,
+                )
+            torch.cuda.current_stream().wait_stream(context.cuda_stream)
+        else:
+            candidates, arrival_scores = self._model.predict_candidates(
+                image_history,
+                instruction,
+                **kwargs,
+            )
+
+        return candidates, arrival_scores

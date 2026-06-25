@@ -30,6 +30,17 @@
     flip_y_axis: true
     fallback_to_dwb: false
     ai_inference_fail_threshold: 3
+    dwb_integration_mode: path_adapter
+    shaped_path_num_waypoints: 4
+    social_cost_hard_radius: 0.35
+    social_cost_personal_radius: 1.0
+    social_cost_social_radius: 1.5
+    social_cost_w_hard: 100.0
+    social_cost_w_personal: 5.0
+    social_cost_w_social: 1.0
+    social_cost_w_global: 0.25
+    social_cost_w_progress: 0.5
+    social_cost_w_smooth: 0.1
     use_dwb_hard_gate: false
     dwb_hard_gate_radius: 0.25
     dwb_hard_gate_regeneration_max_attempts: 3

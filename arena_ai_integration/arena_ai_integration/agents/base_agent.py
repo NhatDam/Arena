@@ -115,11 +115,39 @@ class BaseAgent(ABC):
     ) -> Tuple[np.ndarray, float]:
         """Return (waypoints, arrival_score) in model frame."""
 
+    def predict_candidates(
+        self,
+        image_history: List[np.ndarray],
+        instruction: str,
+        context: Optional[PredictionContext] = None,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        waypoints, arrival_score = self.predict(image_history, instruction, context)
+        return np.asarray(waypoints, dtype=np.float32)[None, :, :], np.asarray(
+            [arrival_score],
+            dtype=np.float32,
+        )
+
     def to_ros_waypoints(self, waypoints: np.ndarray) -> np.ndarray:
-        ros_waypoints = np.zeros_like(waypoints)
-        ros_waypoints[:, 0] = waypoints[:, 0]
+        arr = np.asarray(waypoints, dtype=np.float32)
+        coordinate_mode = str(self.config.extra_params.get('coordinate_mode', '')).strip()
+        if coordinate_mode == 'dataset_to_ros':
+            ros_waypoints = np.zeros_like(arr)
+            ros_waypoints[..., 0] = arr[..., 1]
+            ros_waypoints[..., 1] = arr[..., 0]
+            return ros_waypoints
+
+        ros_waypoints = np.zeros_like(arr)
+        ros_waypoints[..., 0] = arr[..., 0]
         if self.config.flip_y_axis:
-            ros_waypoints[:, 1] = -waypoints[:, 1]
+            ros_waypoints[..., 1] = -arr[..., 1]
         else:
-            ros_waypoints[:, 1] = waypoints[:, 1]
+            ros_waypoints[..., 1] = arr[..., 1]
         return ros_waypoints
+
+    def to_ros_candidates(self, candidates: np.ndarray) -> np.ndarray:
+        arr = np.asarray(candidates, dtype=np.float32)
+        if arr.ndim == 2:
+            return self.to_ros_waypoints(arr)[None, :, :]
+        if arr.ndim == 3:
+            return np.stack([self.to_ros_waypoints(candidate) for candidate in arr], axis=0)
+        raise ValueError(f"Expected candidates shape [K,T,2], got {arr.shape}")
