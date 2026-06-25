@@ -636,16 +636,36 @@ stop_hunav_recording() {
     STOP_REQUESTED=1
     local baseline_lines
     baseline_lines=$(metrics_line_count)
+    local waited=0
+    local max_wait="${HUNAV_STOP_SERVICE_WAIT_SEC:-10}"
 
-    if ros2_cli service list 2>/dev/null | grep -qx '/hunav_stop_recording'; then
-        echo "[INFO] Requesting hunav evaluator stop..."
+    while [ "$waited" -lt "$max_wait" ]; do
+        if ros2_cli service list 2>/dev/null | grep -qx '/hunav_stop_recording'; then
+            break
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+
+    if ! ros2_cli service list 2>/dev/null | grep -qx '/hunav_stop_recording'; then
+        echo "[WARN] /hunav_stop_recording is not available after ${max_wait}s; skipping metrics flush request"
+        return 1
+    fi
+
+    local attempt=1
+    local max_attempts="${HUNAV_STOP_ATTEMPTS:-3}"
+    while [ "$attempt" -le "$max_attempts" ]; do
+        echo "[INFO] Requesting hunav evaluator stop (attempt $attempt/$max_attempts)..."
         ros2_cli service call /hunav_stop_recording std_srvs/srv/Empty "{}" >/dev/null 2>&1 || true
         if wait_for_metrics_flush "$baseline_lines"; then
             echo "[INFO] Hunav evaluator stop completed; metrics flushed"
+            return 0
         fi
-    else
-        echo "[WARN] /hunav_stop_recording is not available; skipping metrics flush request"
-    fi
+        attempt=$((attempt + 1))
+    done
+
+    echo "[WARN] Hunav evaluator stop was requested, but $HUNAV_METRICS_FILE did not gain a row"
+    return 1
 }
 
 stop_sidecars() {

@@ -1,18 +1,18 @@
 contestants:
 
   # ---- SocialNav ----
-  # - name: SocialNav_1_path
-  #   local_planner: dwb
-  #   inter_planner: navigate_w_replanning_time
-  #   agent_name: SocialNav_1_path
-  #   goal_tolerance_radius: 2.5
-
-  # ---- Urban Navigation (UrbanNav FiLM) ----
-  - name: UrbanNav_FiLM
+  - name: SocialNav_1_path
     local_planner: dwb
     inter_planner: navigate_w_replanning_time
-    agent_name: UrbanNav_FiLM
+    agent_name: SocialNav_1_path
     goal_tolerance_radius: 2.5
+
+  # ---- Urban Navigation (UrbanNav FiLM) ----
+  # - name: UrbanNav_FiLM
+  #   local_planner: dwb
+  #   inter_planner: navigate_w_replanning_time
+  #   agent_name: UrbanNav_FiLM
+  #   goal_tolerance_radius: 2.5
 
   # ---- LeLan ----
   # - name: LeLan_v1

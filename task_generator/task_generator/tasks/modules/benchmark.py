@@ -603,7 +603,6 @@ class Mod_Benchmark(TM_Module):
             return
 
         logger = self._logger
-        self._hunav_recording = False
 
         if not self._hunav_stop_client.service_is_ready():
             stop_timeout_sec = float(
@@ -616,6 +615,7 @@ class Mod_Benchmark(TM_Module):
                 logger.warning("[Benchmark] hunav_stop_recording service not available")
                 return
 
+        self._hunav_recording = False
         logger.info("[Benchmark] Requesting hunav stop recording")
         future = self._hunav_stop_client.call_async(Empty.Request())
         future.add_done_callback(self._on_hunav_stop_result)

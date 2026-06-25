@@ -74,7 +74,7 @@ sudo sysctl -w fs.inotify.max_queued_events=32768
 
 source /opt/ros/humble/setup.bash && source ~/arena5_ws/install/setup.bash && conda activate socialnav && export ISAAC_PATH=$HOME/isaacsim-4.2.0
 
-ARENA_AI_PYTHONNOUSERSITE=1 ARENA_HEADLESS=1 RESTART_STACK_EACH_EPISODE=0 FORCE_COLOR=1 bash ./src/Arena/arena_ai_integration/scripts/start_benchmark.sh
+ARENA_AI_DWB_INTEGRATION=shaped_path ARENA_AI_COORDINATE_MODE=dataset_to_ros ARENA_AI_PYTHONNOUSERSITE=1 ARENA_HEADLESS=1 RESTART_STACK_EACH_EPISODE=0 FORCE_COLOR=1 bash ./src/Arena/arena_ai_integration/scripts/start_benchmark.sh
 
 AGENT_TYPE=socialnav ./src/Arena/arena_ai_integration/scripts/start_agent.sh
 AGENT_TYPE=urbannav ./src/Arena/arena_ai_integration/scripts/start_agent.sh

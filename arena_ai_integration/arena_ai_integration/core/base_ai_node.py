@@ -395,6 +395,8 @@ class BaseAINode(Node):
         self.latest_ai_waypoints = None
         self.latest_global_path = None
         self.latest_ai_path = None
+        self.latest_shaped_ai_waypoints = None
+        self.latest_shaped_ai_waypoint_path = None
         self.last_follow_path_goal_handle = None
         self.reset_in_progress   = False
         self.PHASE_AI_LOCAL_GOAL = 'ai_local_goal'
@@ -588,6 +590,8 @@ class BaseAINode(Node):
         self.latest_ai_waypoints = None
         self.latest_global_path = None
         self.latest_ai_path = None
+        self.latest_shaped_ai_waypoints = None
+        self.latest_shaped_ai_waypoint_path = None
         self.path_request_in_progress = False
         with self._image_lock:
             self.image_history.clear()
@@ -734,6 +738,8 @@ class BaseAINode(Node):
         self.latest_ai_waypoints = None
         self.latest_global_path = None
         self.latest_ai_path = None
+        self.latest_shaped_ai_waypoints = None
+        self.latest_shaped_ai_waypoint_path = None
         self.path_request_in_progress = False
         self.last_path_request_time = None
         with self._image_lock:
@@ -1606,6 +1612,8 @@ class BaseAINode(Node):
         return arr[best_idx], best_idx, best_score, best_min_human_dist
 
     def _build_ai_shaped_path(self, global_path: NavPath | None, waypoints: np.ndarray) -> NavPath | None:
+        self.latest_shaped_ai_waypoints = None
+        self.latest_shaped_ai_waypoint_path = None
         if self.current_goal is None:
             return None
 
@@ -1625,6 +1633,9 @@ class BaseAINode(Node):
         path = NavPath()
         path.header.stamp = stamp
         path.header.frame_id = path_frame
+        shaped_waypoint_path = NavPath()
+        shaped_waypoint_path.header.stamp = stamp
+        shaped_waypoint_path.header.frame_id = path_frame
 
         rx, ry, ryaw = robot_pose
         path.poses.append(self._pose_stamped(path_frame, rx, ry, ryaw, stamp))
@@ -1634,12 +1645,15 @@ class BaseAINode(Node):
             return None
 
         last_ai_xy = None
+        inserted_waypoints_local = []
         for waypoint in arr[:self.shaped_path_num_waypoints]:
             xy = self._local_waypoint_to_frame(waypoint[:2], path_frame)
             if xy is None:
                 continue
             last_ai_xy = xy
-            self._append_pose_if_distinct(path, xy[0], xy[1], ryaw, stamp)
+            if self._append_pose_if_distinct(path, xy[0], xy[1], ryaw, stamp):
+                inserted_waypoints_local.append(np.asarray(waypoint[:2], dtype=np.float32))
+                shaped_waypoint_path.poses.append(copy.deepcopy(path.poses[-1]))
 
         goal_pose = self._goal_pose_in_frame(path_frame, stamp)
         if goal_pose is None:
@@ -1686,9 +1700,12 @@ class BaseAINode(Node):
             path.poses[-1].pose.orientation = goal_pose.pose.orientation
 
         self._set_intermediate_orientations(path)
+        if inserted_waypoints_local:
+            self.latest_shaped_ai_waypoints = np.asarray(inserted_waypoints_local, dtype=np.float32)
+            self.latest_shaped_ai_waypoint_path = copy.deepcopy(shaped_waypoint_path)
         self.get_logger().info(
             "AI shaped FollowPath: "
-            f"poses={len(path.poses)} ai_wps={min(self.shaped_path_num_waypoints, len(arr))} "
+            f"poses={len(path.poses)} ai_wps={len(inserted_waypoints_local)} "
             f"frame={path_frame}",
             throttle_duration_sec=1.0,
         )
@@ -1697,6 +1714,8 @@ class BaseAINode(Node):
     def _build_ai_adapted_path(self, global_path: NavPath | None, waypoints: np.ndarray) -> NavPath | None:
         if self.dwb_integration_mode == 'shaped_path':
             return self._build_ai_shaped_path(global_path, waypoints)
+        self.latest_shaped_ai_waypoints = None
+        self.latest_shaped_ai_waypoint_path = None
 
         if self.current_goal is None:
             return None
@@ -2345,7 +2364,7 @@ class BaseAINode(Node):
             self.get_logger().warn(f"Status visualization error: {e}", throttle_duration_sec=2.0)
 
     def _publish_bev_visualization(self, socialnav_waypoints: np.ndarray):
-        """Vẽ BEV: AI waypoints, rolling local goal, DWB response, and robot trail."""
+        """Vẽ BEV tối giản: robot, humans, DWB candidates, DWB baseline, actual path, shaped AI waypoints."""
         try:
             fig, ax = plt.subplots(figsize=(8, 8), dpi=80)
 
@@ -2390,11 +2409,20 @@ class BaseAINode(Node):
 
             ai_segment = None
             wp_idx = None
-            if socialnav_waypoints is not None and len(socialnav_waypoints) > 0:
+            ai_label = "AI shaped waypoints"
+            if self.dwb_integration_mode == 'shaped_path' and self.latest_shaped_ai_waypoints is not None:
+                ai_segment = self._path_to_local_array(self.latest_shaped_ai_waypoint_path)
+                if ai_segment is None:
+                    ai_segment = np.asarray(self.latest_shaped_ai_waypoints, dtype=np.float32)
+                if len(ai_segment) > 0:
+                    inserted_wp = np.asarray(ai_segment[-1], dtype=np.float32)
+                    ai_label = f"AI shaped waypoints x{len(ai_segment)}"
+            elif socialnav_waypoints is not None and len(socialnav_waypoints) > 0:
                 wp_idx = self._path_waypoint_index(socialnav_waypoints)
                 if wp_idx is not None:
-                    ai_segment = socialnav_waypoints[wp_idx:]
+                    ai_segment = np.asarray(socialnav_waypoints[wp_idx:], dtype=np.float32)
                     inserted_wp = np.asarray(socialnav_waypoints[wp_idx], dtype=np.float32)
+                    ai_label = f"AI waypoints WP{wp_idx + 1}-WP{len(socialnav_waypoints)}"
 
             # Vẽ các trajectory ứng viên DWB từ LocalPlanEvaluation (chỉ để quan sát).
             eval_age = self._seconds_since(self.last_eval_time)
@@ -2426,22 +2454,7 @@ class BaseAINode(Node):
                             zorder=1,
                         )
 
-            # Vẽ DWB baseline/global path gốc nếu không có AI WP4.
-            normal_path_local = self._path_to_local_array(self.latest_global_path, max_points=120)
-            if normal_path_local is not None and len(normal_path_local) > 1:
-                plot_bounds.append(normal_path_local)
-                ax.plot(
-                    normal_path_local[:, 0],
-                    normal_path_local[:, 1],
-                    color='#0057D9',
-                    linewidth=3.4,
-                    linestyle='--',
-                    alpha=0.95,
-                    label="DWB baseline path (no AI WP4)",
-                    zorder=2,
-                )
-
-            # Vẽ trajectory DWB đang chọn thật sự theo path hiện tại.
+            # Vẽ trajectory DWB sẽ chọn nếu không có AI can thiệp.
             selected_traj = self._best_dwb_eval_trajectory(eval_msg)
             if selected_traj is not None and len(selected_traj) > 1:
                 plot_bounds.append(selected_traj)
@@ -2450,11 +2463,11 @@ class BaseAINode(Node):
                     selected_traj[:, 1],
                     color='green',
                     linewidth=3.2,
-                    label="DWB selected trajectory",
+                    label="DWB baseline selected trajectory",
                     zorder=4,
                 )
 
-            # Vẽ FollowPath reference thật đang gửi cho DWB.
+            # Vẽ đường được chọn để robot di chuyển thật sự.
             if self.latest_ai_path is not None:
                 active_path_local = self._path_to_local_array(self.latest_ai_path)
                 if active_path_local is not None and len(active_path_local) > 1:
@@ -2465,48 +2478,12 @@ class BaseAINode(Node):
                         color='#FFD700',
                         linewidth=3.6,
                         linestyle='-',
-                        label="Active FollowPath reference",
+                        label="Actual commanded path",
                         zorder=6,
                     )
 
-            # Vẽ local goal thật của rolling adapter, khác với WP4 candidate mới nhất.
-            if self.phase_local_goal_odom is not None:
-                active_goal_local = self._point_in_odom_to_local(
-                    self.phase_local_goal_odom[0],
-                    self.phase_local_goal_odom[1],
-                )
-                if active_goal_local is not None:
-                    lgx, lgy = active_goal_local
-                    radius = self.phase_local_goal_reached_radius
-                    plot_bounds.append(np.asarray([[lgx, lgy]], dtype=np.float32))
-                    if radius > 0.0:
-                        plot_bounds.append(np.asarray(
-                            [[lgx - radius, lgy - radius], [lgx + radius, lgy + radius]],
-                            dtype=np.float32,
-                        ))
-                        ax.add_patch(plt.Circle(
-                            (lgx, lgy),
-                            radius,
-                            fill=False,
-                            color='#7B2CBF',
-                            linestyle=':',
-                            linewidth=1.8,
-                            alpha=0.85,
-                            zorder=7,
-                        ))
-                    ax.scatter(
-                        [lgx],
-                        [lgy],
-                        c='#7B2CBF',
-                        s=260,
-                        marker='*',
-                        edgecolors='black',
-                        label="Active rolling local goal",
-                        zorder=10,
-                    )
-
-            # Vẽ AI path từ waypoint được chèn tới waypoint cuối, không vẽ toàn bộ 8 điểm.
-            if ai_segment is not None and inserted_wp is not None and wp_idx is not None:
+            # Vẽ các waypoint AI thật sự đã được đưa vào shaped path.
+            if ai_segment is not None and inserted_wp is not None and len(ai_segment) > 0:
                 plot_bounds.append(ai_segment)
                 if len(ai_segment) > 1:
                     ax.plot(
@@ -2514,13 +2491,13 @@ class BaseAINode(Node):
                         ai_segment[:, 1],
                         'r--',
                         linewidth=3.0,
-                        label=f"Latest AI WP{wp_idx + 1}-WP{len(socialnav_waypoints)}",
+                        label=ai_label,
                         zorder=6,
                     )
                 ax.scatter(ai_segment[:, 0], ai_segment[:, 1],
                            c='red', s=40, zorder=7)
                 ax.scatter([inserted_wp[0]], [inserted_wp[1]], c='orange', s=140, marker='D',
-                           edgecolors='black', label=f"Latest AI WP{wp_idx + 1} candidate", zorder=8)
+                           edgecolors='black', label="Last shaped AI WP", zorder=8)
 
             # Vẽ con người
             if self.enable_human_tracking and self.human_tracker.is_ready():
@@ -2540,24 +2517,8 @@ class BaseAINode(Node):
                         ax.scatter(hx_list, hy_list, c='blue', marker='o', s=80,
                                    edgecolors='black', label="Humans", zorder=7)
 
-            # Goal benchmark thực sự (tam giác xanh lá) nếu có
-            if self.current_goal is not None and self.current_odom is not None:
-                goal_odom = self._goal_position_in_odom_frame()
-                if goal_odom is not None:
-                    dx = goal_odom[0] - cx
-                    dy = goal_odom[1] - cy
-                    lx_bg =  dx * cos_yaw + dy * sin_yaw
-                    ly_bg = -dx * sin_yaw + dy * cos_yaw
-                    plot_bounds.append(np.asarray([[lx_bg, ly_bg]], dtype=np.float32))
-                    ax.plot(lx_bg, ly_bg, 'g^', markersize=14, label="Benchmark Goal", zorder=9)
-
-            local_goal_dist = self._distance_to_phase_local_goal()
-            local_goal_dist_str = f"{local_goal_dist:.2f}m" if local_goal_dist is not None else "n/a"
             ax.set_title(
-                "SocialNav Rolling Local Goal BEV\n"
-                f"phase={self.path_phase} mode={self.local_goal_relock_mode} "
-                f"subgoal={self.phase_local_goal_lock_count} "
-                f"local_goal_dist={local_goal_dist_str}",
+                "AI-DWB BEV",
                 fontsize=12,
                 fontweight='bold',
             )
@@ -2618,6 +2579,8 @@ class BaseAINode(Node):
         self.latest_ai_waypoints = None
         self.latest_global_path = None
         self.latest_ai_path = None
+        self.latest_shaped_ai_waypoints = None
+        self.latest_shaped_ai_waypoint_path = None
         self.path_request_in_progress = False
         self._ai_consecutive_failures = 0
         self._reset_phase_state()
