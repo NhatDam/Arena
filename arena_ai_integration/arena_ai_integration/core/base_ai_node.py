@@ -1646,10 +1646,22 @@ class BaseAINode(Node):
 
         last_ai_xy = None
         inserted_waypoints_local = []
-        for waypoint in arr[:self.shaped_path_num_waypoints]:
+        for wp_i, waypoint in enumerate(arr[:self.shaped_path_num_waypoints]):
             xy = self._local_waypoint_to_frame(waypoint[:2], path_frame)
             if xy is None:
                 continue
+            if wp_i == 3:
+                coord_mode = str(self.agent.config.extra_params.get('coordinate_mode', '')).strip() or 'default'
+                self.get_logger().info(
+                    "[WP_DEBUG] stage=shaped_local_to_frame wp_idx=3 "
+                    f"raw=(n/a,n/a) "
+                    f"ros=({float(waypoint[0]):.3f},{float(waypoint[1]):.3f}) "
+                    f"selected=({float(waypoint[0]):.3f},{float(waypoint[1]):.3f}) "
+                    f"frame_xy=({float(xy[0]):.3f},{float(xy[1]):.3f}) "
+                    f"robot_yaw={float(ryaw):.3f} "
+                    f"mode={self.dwb_integration_mode} coord_mode={coord_mode}",
+                    throttle_duration_sec=0.5,
+                )
             last_ai_xy = xy
             if self._append_pose_if_distinct(path, xy[0], xy[1], ryaw, stamp):
                 inserted_waypoints_local.append(np.asarray(waypoint[:2], dtype=np.float32))
@@ -1857,6 +1869,10 @@ class BaseAINode(Node):
 
     def _request_ai_path_update(self, waypoints: np.ndarray) -> None:
         if self.current_goal is None:
+            self.get_logger().info(
+                "[PATH_DEBUG] request_skip reason=no_current_goal",
+                throttle_duration_sec=1.0,
+            )
             return
         if not self._clock_ready_for_nav2():
             self.get_logger().warn(
@@ -1864,21 +1880,67 @@ class BaseAINode(Node):
                 throttle_duration_sec=2.0,
             )
             return
+        now = self.get_clock().now()
+        if self.last_path_request_time is None:
+            if self.path_request_in_progress:
+                self.get_logger().info(
+                    "[PATH_DEBUG] request_skip reason=in_progress_without_timestamp",
+                    throttle_duration_sec=0.5,
+                )
+                return
+        else:
+            elapsed = (now - self.last_path_request_time).nanoseconds / 1e9
+            if self.path_request_in_progress:
+                self.get_logger().info(
+                    "[PATH_DEBUG] request_skip "
+                    f"reason=compute_path_in_progress elapsed={elapsed:.3f}s",
+                    throttle_duration_sec=0.5,
+                )
+                return
+            if elapsed < self.path_update_period_sec:
+                self.get_logger().info(
+                    "[PATH_DEBUG] request_skip "
+                    f"reason=not_due elapsed={elapsed:.3f}s "
+                    f"period={self.path_update_period_sec:.3f}s",
+                    throttle_duration_sec=0.5,
+                )
+                return
+
+        wp_idx = self._path_waypoint_index(waypoints)
+        wp = waypoints[wp_idx] if wp_idx is not None else [0.0, 0.0]
+        self.get_logger().info(
+            "[PATH_DEBUG] request_start "
+            f"mode={self.dwb_integration_mode} phase={self.path_phase} "
+            f"in_progress={self.path_request_in_progress} wp_idx={wp_idx} "
+            f"wp_local=({float(wp[0]):.3f},{float(wp[1]):.3f})",
+            throttle_duration_sec=0.5,
+        )
         if not self._path_update_due():
+            self.get_logger().info(
+                "[PATH_DEBUG] request_skip reason=path_update_due_false_after_checks",
+                throttle_duration_sec=0.5,
+            )
             return
 
         self.latest_ai_waypoints = np.array(waypoints, copy=True)
-        now = self.get_clock().now()
         self.last_path_request_time = now
 
         if self._phase_local_goal_active() and self.dwb_integration_mode != 'shaped_path':
             self.path_request_in_progress = False
+            self.get_logger().info(
+                "[PATH_DEBUG] direct_follow_path reason=active_local_goal_non_shaped",
+                throttle_duration_sec=0.5,
+            )
             self._send_ai_follow_path(None, self.latest_ai_waypoints)
             return
 
         self.path_request_in_progress = True
 
         if not self.compute_path_client.wait_for_server(timeout_sec=0.0):
+            self.get_logger().info(
+                "[PATH_DEBUG] compute_path_unavailable fallback=minimal_follow_path",
+                throttle_duration_sec=0.5,
+            )
             self.get_logger().warn(
                 f"ComputePathToPose action {self.planner_action_name} unavailable; "
                 "sending a minimal SocialNav path directly to FollowPath.",
@@ -1896,6 +1958,11 @@ class BaseAINode(Node):
         if hasattr(goal_msg, 'use_start'):
             goal_msg.use_start = False
 
+        self.get_logger().info(
+            "[PATH_DEBUG] compute_path_goal_send "
+            f"planner_action={self.planner_action_name}",
+            throttle_duration_sec=0.5,
+        )
         future = self.compute_path_client.send_goal_async(goal_msg)
         future.add_done_callback(self._on_compute_path_goal_response)
 
@@ -1912,6 +1979,10 @@ class BaseAINode(Node):
             self.get_logger().warn("ComputePathToPose goal rejected.", throttle_duration_sec=2.0)
             return
 
+        self.get_logger().info(
+            "[PATH_DEBUG] compute_path_goal_accepted",
+            throttle_duration_sec=0.5,
+        )
         result_future = goal_handle.get_result_async()
         result_future.add_done_callback(self._on_compute_path_result)
 
@@ -1928,6 +1999,12 @@ class BaseAINode(Node):
             global_path = None
 
         self.latest_global_path = copy.deepcopy(global_path) if global_path is not None else None
+        self.get_logger().info(
+            "[PATH_DEBUG] compute_path_result "
+            f"global_poses={len(global_path.poses) if global_path is not None else 0} "
+            f"has_latest_ai_waypoints={self.latest_ai_waypoints is not None}",
+            throttle_duration_sec=0.5,
+        )
         if self.latest_ai_waypoints is None:
             return
         self._send_ai_follow_path(global_path, self.latest_ai_waypoints)
@@ -1937,6 +2014,13 @@ class BaseAINode(Node):
         global_path: NavPath | None,
         waypoints: np.ndarray,
     ) -> bool:
+        self.get_logger().info(
+            "[PATH_DEBUG] follow_path_build_start "
+            f"mode={self.dwb_integration_mode} "
+            f"global_poses={len(global_path.poses) if global_path is not None else 0} "
+            f"waypoints={len(waypoints) if waypoints is not None else 0}",
+            throttle_duration_sec=0.5,
+        )
         path = self._build_ai_adapted_path(global_path, waypoints)
         if path is None or len(path.poses) < 2:
             self.get_logger().warn(
@@ -1947,6 +2031,11 @@ class BaseAINode(Node):
 
         self.latest_ai_path = copy.deepcopy(path)
         self.path_pub.publish(path)
+        self.get_logger().info(
+            "[PATH_DEBUG] follow_path_built "
+            f"poses={len(path.poses)} frame={path.header.frame_id}",
+            throttle_duration_sec=0.5,
+        )
 
         if not self.follow_path_client.wait_for_server(timeout_sec=0.0):
             self.get_logger().warn(
@@ -1989,6 +2078,10 @@ class BaseAINode(Node):
             return
 
         self.last_follow_path_goal_handle = goal_handle
+        self.get_logger().info(
+            "[PATH_DEBUG] follow_path_goal_accepted",
+            throttle_duration_sec=0.5,
+        )
 
     # ──────────────────────────── Startup / Fallback Helpers ────────────────────
 
@@ -2208,6 +2301,46 @@ class BaseAINode(Node):
                 human_positions,
                 human_mask,
             )
+            debug_wp_idx = 3
+            raw_arr = np.asarray(candidates, dtype=np.float32)
+            ros_arr = np.asarray(ros_candidates, dtype=np.float32)
+            raw_wp = None
+            ros_wp = None
+            if raw_arr.ndim == 3 and raw_arr.shape[1] > debug_wp_idx:
+                raw_wp = raw_arr[min(best_k, raw_arr.shape[0] - 1), debug_wp_idx, :2]
+            elif raw_arr.ndim == 2 and raw_arr.shape[0] > debug_wp_idx:
+                raw_wp = raw_arr[debug_wp_idx, :2]
+            if ros_arr.ndim == 3 and ros_arr.shape[1] > debug_wp_idx:
+                ros_wp = ros_arr[min(best_k, ros_arr.shape[0] - 1), debug_wp_idx, :2]
+            elif ros_arr.ndim == 2 and ros_arr.shape[0] > debug_wp_idx:
+                ros_wp = ros_arr[debug_wp_idx, :2]
+            if ros_waypoints is not None and len(ros_waypoints) > debug_wp_idx:
+                selected_wp = ros_waypoints[debug_wp_idx, :2]
+            else:
+                selected_wp = None
+            raw_str = (
+                f"({float(raw_wp[0]):.3f},{float(raw_wp[1]):.3f})"
+                if raw_wp is not None
+                else "(n/a,n/a)"
+            )
+            ros_str = (
+                f"({float(ros_wp[0]):.3f},{float(ros_wp[1]):.3f})"
+                if ros_wp is not None
+                else "(n/a,n/a)"
+            )
+            selected_str = (
+                f"({float(selected_wp[0]):.3f},{float(selected_wp[1]):.3f})"
+                if selected_wp is not None
+                else "(n/a,n/a)"
+            )
+            coord_mode = str(self.agent.config.extra_params.get('coordinate_mode', '')).strip() or 'default'
+            self.get_logger().info(
+                "[WP_DEBUG] stage=after_to_ros wp_idx=3 "
+                f"raw={raw_str} ros={ros_str} selected={selected_str} "
+                f"frame_xy=(n/a,n/a) robot_yaw={float(cyaw):.3f} "
+                f"mode={self.dwb_integration_mode} coord_mode={coord_mode}",
+                throttle_duration_sec=0.5,
+            )
             arrival_arr = np.asarray(arrival_scores, dtype=np.float32).reshape(-1)
             arrival_score = float(arrival_arr[min(best_k, len(arrival_arr) - 1)]) if len(arrival_arr) else 0.0
 
@@ -2399,11 +2532,11 @@ class BaseAINode(Node):
                 ax.plot(
                     trail_local[:, 0],
                     trail_local[:, 1],
-                    color='#1F77B4',
+                    color='green',
                     linewidth=2.2,
                     marker='.',
                     markersize=4,
-                    label="Robot actual trail",
+                    label="Actual robot path (AI+DWB)",
                     zorder=3,
                 )
 
@@ -2461,26 +2594,11 @@ class BaseAINode(Node):
                 ax.plot(
                     selected_traj[:, 0],
                     selected_traj[:, 1],
-                    color='green',
+                    color='#0066FF',
                     linewidth=3.2,
-                    label="DWB baseline selected trajectory",
+                    label="DWB baseline path (no AI)",
                     zorder=4,
                 )
-
-            # Vẽ đường được chọn để robot di chuyển thật sự.
-            if self.latest_ai_path is not None:
-                active_path_local = self._path_to_local_array(self.latest_ai_path)
-                if active_path_local is not None and len(active_path_local) > 1:
-                    plot_bounds.append(active_path_local)
-                    ax.plot(
-                        active_path_local[:, 0],
-                        active_path_local[:, 1],
-                        color='#FFD700',
-                        linewidth=3.6,
-                        linestyle='-',
-                        label="Actual commanded path",
-                        zorder=6,
-                    )
 
             # Vẽ các waypoint AI thật sự đã được đưa vào shaped path.
             if ai_segment is not None and inserted_wp is not None and len(ai_segment) > 0:

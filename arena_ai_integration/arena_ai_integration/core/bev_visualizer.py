@@ -89,11 +89,11 @@ class BEVVisualizer:
             ax.plot(
                 trail_local[:, 0],
                 trail_local[:, 1],
-                color='#1F77B4',
+                color='green',
                 linewidth=2.2,
                 marker='.',
                 markersize=4,
-                label="Robot actual trail",
+                label="Actual robot path (AI+DWB)",
                 zorder=3,
             )
 
@@ -139,25 +139,11 @@ class BEVVisualizer:
             ax.plot(
                 selected_traj[:, 0],
                 selected_traj[:, 1],
-                color='green',
+                color='#0066FF',
                 linewidth=3.2,
-                label="DWB baseline selected trajectory",
+                label="DWB baseline path (no AI)",
                 zorder=4,
             )
-
-        # if latest_ai_path is not None:
-        #     active_path_local = path_to_local_array_fn(latest_ai_path)
-        #     if active_path_local is not None and len(active_path_local) > 1:
-        #         plot_bounds.append(active_path_local)
-        #         ax.plot(
-        #             active_path_local[:, 0],
-        #             active_path_local[:, 1],
-        #             color='#FFD700',
-        #             linewidth=3.6,
-        #             linestyle='-',
-        #             label="Actual commanded path",
-        #             zorder=6,
-        #         )
 
         if ai_segment is not None and inserted_wp is not None and wp_idx is not None:
             plot_bounds.append(ai_segment)

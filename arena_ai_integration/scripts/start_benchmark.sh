@@ -114,7 +114,11 @@ AI_CUDA_VISIBLE_DEVICES="${AI_CUDA_VISIBLE_DEVICES:-}"
 ARENA_AI_DWB_INTEGRATION="${ARENA_AI_DWB_INTEGRATION:-path_adapter}"
 ARENA_AI_DWB_HARD_GATE="${ARENA_AI_DWB_HARD_GATE:-false}"
 ARENA_AI_COORDINATE_MODE="${ARENA_AI_COORDINATE_MODE:-xz_to_ros}"
-export ARENA_AI_DWB_INTEGRATION ARENA_AI_DWB_HARD_GATE ARENA_AI_COORDINATE_MODE
+ARENA_AI_STREAM_DEBUG="${ARENA_AI_STREAM_DEBUG:-1}"
+export ARENA_AI_DWB_INTEGRATION ARENA_AI_DWB_HARD_GATE ARENA_AI_COORDINATE_MODE ARENA_AI_STREAM_DEBUG
+AI_DEBUG_LOG_FILE=""
+AI_DEBUG_LOG_LINE=0
+AI_DEBUG_LOG_PATTERN="WP_DEBUG|PATH_DEBUG|Sent SocialNav path|AI shaped FollowPath|AI shaped path rejoin|ComputePathToPose|FollowPath action|FollowPath goal|Unable to build SocialNav FollowPath|following AI shaped DWB path; waiting"
 
 ros2_cli() {
     local -a clean_env=(
@@ -628,6 +632,59 @@ current_contestant_from_logs() {
     return 0
 }
 
+latest_ai_controller_log() {
+    local entry
+    local entry_sec
+    local log_file
+
+    while IFS= read -r entry; do
+        entry_sec="${entry%%.*}"
+        if [ -n "$entry_sec" ] && [ "$entry_sec" -lt "$SCRIPT_START_TS" ]; then
+            continue
+        fi
+        log_file="${entry#* }"
+        if [ -f "$log_file" ] && grep -Eq "ai_controller_task_generator_node_turtlebot|AI DWB Path Adapter|WP_DEBUG|PATH_DEBUG" "$log_file"; then
+            printf '%s\n' "$log_file"
+            return 0
+        fi
+    done < <(find ~/.ros/log -maxdepth 1 -type f -name 'python3_*.log' -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -40)
+
+    return 1
+}
+
+stream_ai_debug_logs() {
+    if [ "$ARENA_AI_STREAM_DEBUG" != "1" ]; then
+        return 0
+    fi
+
+    local log_file
+    log_file=$(latest_ai_controller_log || true)
+    if [ -z "$log_file" ] || [ ! -f "$log_file" ]; then
+        return 0
+    fi
+
+    if [ "$log_file" != "$AI_DEBUG_LOG_FILE" ]; then
+        AI_DEBUG_LOG_FILE="$log_file"
+        AI_DEBUG_LOG_LINE=0
+        echo -e "\n[INFO] Streaming AI debug log: $AI_DEBUG_LOG_FILE"
+    fi
+
+    local total_lines
+    total_lines=$(wc -l < "$AI_DEBUG_LOG_FILE" 2>/dev/null || echo 0)
+    if [ "$total_lines" -le "$AI_DEBUG_LOG_LINE" ]; then
+        return 0
+    fi
+
+    local new_lines
+    new_lines=$(sed -n "$((AI_DEBUG_LOG_LINE + 1)),${total_lines}p" "$AI_DEBUG_LOG_FILE" 2>/dev/null \
+        | grep -E "$AI_DEBUG_LOG_PATTERN" || true)
+    AI_DEBUG_LOG_LINE="$total_lines"
+
+    if [ -n "$new_lines" ]; then
+        printf '\n%s\n' "$new_lines" | sed 's/^/[AI_LOG] /'
+    fi
+}
+
 stop_hunav_recording() {
     if [ "$STOP_REQUESTED" -eq 1 ]; then
         return 0
@@ -1024,6 +1081,7 @@ run_arena_once() {
                 echo -ne "\r[PROGRESS] $PROGRESS"
             fi
         fi
+        stream_ai_debug_logs
 
         CURRENT_AGENT=""
         CURRENT_CONTESTANT=""
