@@ -410,6 +410,10 @@ class BaseAINode(Node):
         self.last_follow_path_send_time = None
         self.follow_path_send_count = 0
         self.active_follow_path_send_count = 0
+        self._follow_path_owner: str = 'none'
+        self._force_infer: bool = False
+        self._pending_bt_cancel_future = None
+        self._subgoal_phase: str = 'idle'
         self.reset_in_progress   = False
         self.PHASE_AI_LOCAL_GOAL = 'ai_local_goal'
         self.PHASE_GLOBAL_GOAL = 'global_goal'
@@ -614,6 +618,10 @@ class BaseAINode(Node):
         self.last_follow_path_send_time = None
         self.follow_path_send_count = 0
         self.active_follow_path_send_count = 0
+        self._follow_path_owner = 'none'
+        self._force_infer = False
+        self._pending_bt_cancel_future = None
+        self._subgoal_phase = 'idle'
         with self._image_lock:
             self.image_history.clear()
         self.odom_history.clear()
@@ -759,16 +767,29 @@ class BaseAINode(Node):
 
     def watchdog_callback(self):
         """Dừng robot nếu không nhận được command DWB thô quá lâu."""
-        if not self.episode_active:
+        if not self.episode_active or self.task_complete or self.reset_in_progress:
             return
+
+        if self._subgoal_phase == 'chasing_waypoint' and self._follow_path_owner == 'ai':
+            return
+
         elapsed = (self.get_clock().now() - self.last_dwb_cmd_time).nanoseconds / 1e9
-        if elapsed > self.dwb_cmd_staleness_sec and not self.task_complete and not self.reset_in_progress:
+        if elapsed > self.dwb_cmd_staleness_sec:
             self.cmd_pub.publish(Twist())
 
     def goal_callback(self, msg: PoseStamped):
         """Nhận và lưu global goal thật của benchmark/Nav2."""
         self.current_goal = msg
         now = self.get_clock().now()
+
+        pending_cancel = None
+        if self.last_follow_path_goal_handle is not None:
+            try:
+                pending_cancel = self.last_follow_path_goal_handle.cancel_goal_async()
+            except Exception as exc:
+                self.get_logger().warn(f"goal_callback: cancel BT handle failed: {exc}")
+            self.last_follow_path_goal_handle = None
+
         self.episode_active = True
         self.task_complete = False
         self.reset_in_progress = False
@@ -789,7 +810,16 @@ class BaseAINode(Node):
         self.last_follow_path_goal_handle = None
         self.last_follow_path_send_time = None
         self.follow_path_send_count = 0
+        self.active_follow_path_send_count = 0
         self.last_path_request_time = None
+        self._pending_bt_cancel_future = pending_cancel
+        self._subgoal_phase = (
+            'cancelling_bt'
+            if self._pending_bt_cancel_future is not None
+            else 'chasing_waypoint'
+        )
+        self._follow_path_owner = 'none'
+        self._force_infer = False
         with self._image_lock:
             self.image_history.clear()
         self.odom_history.clear()
@@ -1852,34 +1882,6 @@ class BaseAINode(Node):
         path.poses.append(self._pose_stamped(path_frame, rx, ry, ryaw, stamp))
 
         if self._phase_local_goal_active():
-            if global_path is not None and global_path.poses:
-                path.poses.clear()
-                path.header.frame_id = self._frame_name(global_path.header.frame_id) or path_frame
-                path.header.stamp = stamp
-
-                first_x, first_y = self._pose_xy(global_path.poses[0])
-                if math.hypot(first_x - rx, first_y - ry) > 0.05:
-                    path.poses.append(self._pose_stamped(path.header.frame_id, rx, ry, ryaw, stamp))
-
-                for pose in global_path.poses:
-                    path_pose = copy.deepcopy(pose)
-                    path_pose.header.stamp = stamp
-                    path_pose.header.frame_id = path.header.frame_id
-                    path.poses.append(path_pose)
-
-                self._set_intermediate_orientations(path)
-                dist = self._distance_to_phase_local_goal()
-                dist_str = f"{dist:.2f}m" if dist is not None else "n/a"
-                self.get_logger().info(
-                    "SocialNav FollowPath phase=ai_local_goal planner_subgoal_path: "
-                    f"mode={self.local_goal_relock_mode} "
-                    f"subgoal_count={self.phase_local_goal_lock_count} "
-                    f"wp_idx={self.phase_local_goal_wp_idx} poses={len(path.poses)} "
-                    f"local_goal_dist={dist_str} frame={path.header.frame_id}",
-                    throttle_duration_sec=1.0,
-                )
-                return path
-
             target_xy = None
             if self.phase_local_goal_odom is not None:
                 target_xy = self._point_between_frames(
@@ -1896,6 +1898,17 @@ class BaseAINode(Node):
                 return None
 
             wx, wy = target_xy
+            path.poses.clear()
+            path.poses.append(self._pose_stamped(path_frame, rx, ry, ryaw, stamp))
+
+            if global_path is not None and global_path.poses:
+                nearest_idx = self._nearest_path_index(global_path, wx, wy)
+                for pose in global_path.poses[1:nearest_idx]:
+                    tail_pose = copy.deepcopy(pose)
+                    tail_pose.header.stamp = stamp
+                    tail_pose.header.frame_id = path_frame
+                    path.poses.append(tail_pose)
+
             path.poses.append(self._pose_stamped(path_frame, wx, wy, ryaw, stamp))
             self._set_intermediate_orientations(path)
             dist = self._distance_to_phase_local_goal()
@@ -1905,7 +1918,8 @@ class BaseAINode(Node):
                 f"mode={self.local_goal_relock_mode} "
                 f"subgoal_count={self.phase_local_goal_lock_count} "
                 f"wp_idx={self.phase_local_goal_wp_idx} poses={len(path.poses)} "
-                f"local_goal_dist={dist_str} frame={path_frame}",
+                f"local_goal_dist={dist_str} frame={path_frame} "
+                f"last_xy=({path.poses[-1].pose.position.x:.2f},{path.poses[-1].pose.position.y:.2f})",
                 throttle_duration_sec=1.0,
             )
             return path
@@ -2252,10 +2266,11 @@ class BaseAINode(Node):
 
         self.last_follow_path_goal_handle = goal_handle
         self.active_follow_path_send_count = send_count
+        self._follow_path_owner = 'ai'
         self.get_logger().info(
             "[PATH_DEBUG] follow_path_goal_accepted "
             f"action={self.follow_path_action_name} "
-            f"send_count={send_count}",
+            f"send_count={send_count} owner={self._follow_path_owner}",
             throttle_duration_sec=0.5,
         )
         result_future = goal_handle.get_result_async()
@@ -2283,15 +2298,42 @@ class BaseAINode(Node):
             "[PATH_DEBUG] follow_path_result "
             f"status={status} action={self.follow_path_action_name} "
             f"send_count={send_count} active_send_count={self.active_follow_path_send_count} "
-            f"state={state} error_code={error_code} error_msg={error_msg!r} "
+            f"state={state} phase={self._subgoal_phase} owner={self._follow_path_owner} "
+            f"error_code={error_code} error_msg={error_msg!r} "
             f"raw_cmd_count={self.dwb_cmd_count}",
             throttle_duration_sec=0.5,
         )
-        if is_current:
-            self.last_follow_path_goal_handle = None
-            self.active_follow_path_send_count = 0
-            if status == 6:
-                self.last_path_request_time = None
+        if not is_current:
+            return
+
+        self.last_follow_path_goal_handle = None
+        self.active_follow_path_send_count = 0
+        self._follow_path_owner = 'none'
+
+        if status == 4 and self._subgoal_phase == 'chasing_waypoint':
+            self.get_logger().info(
+                "[SUBGOAL] FollowPath SUCCEEDED at waypoint; triggering immediate re-inference"
+            )
+            self._subgoal_phase = 'waypoint_reached'
+            self._force_infer = True
+            self.last_path_request_time = None
+            self.path_request_in_progress = False
+            self.phase_local_goal_odom = None
+            self.control_loop_callback()
+            return
+
+        if status == 5 and self._subgoal_phase == 'chasing_waypoint':
+            self.get_logger().warn(
+                "[SUBGOAL] FollowPath CANCELED externally; re-asserting AI ownership"
+            )
+            self._subgoal_phase = 'cancelling_bt'
+            self._pending_bt_cancel_future = None
+            self.last_path_request_time = None
+            self.path_request_in_progress = False
+            return
+
+        if status == 6:
+            self.last_path_request_time = None
 
     # ──────────────────────────── Startup / Fallback Helpers ────────────────────
 
@@ -2453,6 +2495,21 @@ class BaseAINode(Node):
         if not self.episode_active:
             self.cmd_pub.publish(Twist())
             return
+
+        if self._subgoal_phase == 'cancelling_bt':
+            if self._pending_bt_cancel_future is not None:
+                if not self._pending_bt_cancel_future.done():
+                    self.cmd_pub.publish(Twist())
+                    return
+                try:
+                    self._pending_bt_cancel_future.result()
+                except Exception as exc:
+                    self.get_logger().warn(f"BT cancel result error (non-fatal): {exc}")
+                self._pending_bt_cancel_future = None
+
+            self._subgoal_phase = 'chasing_waypoint'
+            self._follow_path_owner = 'none'
+            self.last_path_request_time = None
 
         if self.task_complete:
             self._stop()
@@ -2636,6 +2693,30 @@ class BaseAINode(Node):
                     distance_to_goal=dist_to_goal,
                 )
                 return
+
+            if self._subgoal_phase == 'waypoint_reached':
+                if (
+                    self.rolling_local_goal_final_radius > 0.0
+                    and dist_to_goal is not None
+                    and dist_to_goal <= self.rolling_local_goal_final_radius
+                ):
+                    self._subgoal_phase = 'returning_to_goal'
+                    self._switch_to_global_phase("waypoint reached, inside final radius")
+                    self._force_infer = False
+                    self._relay_dwb_raw_cmd("returning to benchmark goal")
+                    return
+
+                if self._lock_phase_local_goal(ros_waypoints, "chaining after SUCCEEDED"):
+                    self._subgoal_phase = 'chasing_waypoint'
+                    self._force_infer = False
+                    self._request_ai_path_update(ros_waypoints)
+                else:
+                    self._subgoal_phase = 'returning_to_goal'
+                    self._switch_to_global_phase("no valid next waypoint after SUCCEEDED")
+                    self._force_infer = False
+                return
+
+            self._force_infer = False
 
             # 7. State machine: phase 1 chases the selected AI waypoint,
             #    phase 2 returns to the benchmark/global goal.
