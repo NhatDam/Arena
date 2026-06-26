@@ -7,4 +7,4 @@
     arrival_threshold: 0.7
     ai_rejoin_skip_distance: 0.8
     enable_bev_visualization: true
-    enable_human_tracking: false
+    enable_human_tracking: true

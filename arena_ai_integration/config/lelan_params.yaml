@@ -7,7 +7,7 @@
     arrival_threshold: 0.7
     ai_rejoin_skip_distance: 0.8
     enable_bev_visualization: true
-    enable_human_tracking: false
+    enable_human_tracking: true
     max_linear_velocity: 0.5
     max_angular_velocity: 1.0
     coordinate_mode: xz_to_ros

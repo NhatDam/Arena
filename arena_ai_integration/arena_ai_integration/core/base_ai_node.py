@@ -403,6 +403,7 @@ class BaseAINode(Node):
         self.latest_ai_waypoints = None
         self.latest_global_path = None
         self.latest_benchmark_global_path = None
+        self.latest_no_ai_dwb_trajectory = None
         self.latest_ai_path = None
         self.latest_shaped_ai_waypoints = None
         self.latest_shaped_ai_waypoint_path = None
@@ -612,6 +613,7 @@ class BaseAINode(Node):
         self.latest_ai_waypoints = None
         self.latest_global_path = None
         self.latest_benchmark_global_path = None
+        self.latest_no_ai_dwb_trajectory = None
         self.latest_ai_path = None
         self.latest_shaped_ai_waypoints = None
         self.latest_shaped_ai_waypoint_path = None
@@ -667,6 +669,8 @@ class BaseAINode(Node):
         # Visualization only. Control remains delegated to DWB FollowPath.
         self.latest_eval = msg
         self.last_eval_time = self.get_clock().now()
+        if self._follow_path_owner != 'ai':
+            self.latest_no_ai_dwb_trajectory = self._best_dwb_eval_trajectory_points(msg)
 
     def dwb_cmd_callback(self, msg: Twist):
         now = self.get_clock().now()
@@ -807,6 +811,7 @@ class BaseAINode(Node):
         self.latest_ai_waypoints = None
         self.latest_global_path = None
         self.latest_benchmark_global_path = None
+        self.latest_no_ai_dwb_trajectory = None
         self.latest_ai_path = None
         self.latest_shaped_ai_waypoints = None
         self.latest_shaped_ai_waypoint_path = None
@@ -1432,7 +1437,10 @@ class BaseAINode(Node):
         points = [(pose.x, pose.y) for pose in poses]
         return self._points_in_frame_to_local_array(points, frame_id)
 
-    def _best_dwb_eval_trajectory(self, eval_msg: LocalPlanEvaluation | None) -> np.ndarray | None:
+    def _best_dwb_eval_trajectory_points(
+        self,
+        eval_msg: LocalPlanEvaluation | None,
+    ) -> tuple[list[tuple[float, float]], str] | None:
         if eval_msg is None:
             return None
         best_twist = None
@@ -1445,7 +1453,24 @@ class BaseAINode(Node):
                 best_twist = twist
         if best_twist is None:
             return None
-        return self._dwb_traj_to_local_array(best_twist.traj.poses, eval_msg.header.frame_id)
+        points = [(pose.x, pose.y) for pose in best_twist.traj.poses]
+        return points, eval_msg.header.frame_id
+
+    def _best_dwb_eval_trajectory(self, eval_msg: LocalPlanEvaluation | None) -> np.ndarray | None:
+        best = self._best_dwb_eval_trajectory_points(eval_msg)
+        if best is None:
+            return None
+        points, frame_id = best
+        return self._points_in_frame_to_local_array(points, frame_id)
+
+    def _stored_dwb_trajectory_to_local(
+        self,
+        stored_trajectory: tuple[list[tuple[float, float]], str] | None,
+    ) -> np.ndarray | None:
+        if stored_trajectory is None:
+            return None
+        points, frame_id = stored_trajectory
+        return self._points_in_frame_to_local_array(points, frame_id)
 
     def _robot_pose_in_frame(self, target_frame: str) -> tuple[float, float, float] | None:
         robot_pose = self._robot_pose_in_odom()
@@ -2892,7 +2917,7 @@ class BaseAINode(Node):
                     baseline_local[:, 1],
                     color='green',
                     linewidth=2.2,
-                    label="DWB no-AI baseline",
+                    label="Global planner",
                     zorder=3,
                 )
 
@@ -2943,7 +2968,7 @@ class BaseAINode(Node):
                             zorder=1,
                         )
 
-            # Vẽ trajectory DWB sẽ chọn nếu không có AI can thiệp.
+            # Vẽ trajectory tốt nhất hiện tại của DWB theo FollowPath đang active.
             selected_traj = self._best_dwb_eval_trajectory(eval_msg)
             if selected_traj is not None and len(selected_traj) > 1:
                 plot_bounds.append(selected_traj)
@@ -2954,6 +2979,20 @@ class BaseAINode(Node):
                     linewidth=3.2,
                     label="DWB best trajectory",
                     zorder=4,
+                )
+
+            no_ai_selected_traj = self._stored_dwb_trajectory_to_local(
+                self.latest_no_ai_dwb_trajectory
+            )
+            if no_ai_selected_traj is not None and len(no_ai_selected_traj) > 1:
+                plot_bounds.append(no_ai_selected_traj)
+                ax.plot(
+                    no_ai_selected_traj[:, 0],
+                    no_ai_selected_traj[:, 1],
+                    color='gold',
+                    linewidth=2.8,
+                    label="DWB selected no-AI",
+                    zorder=4.5,
                 )
 
             # Vẽ các waypoint AI thật sự đã được đưa vào shaped path.
@@ -3053,6 +3092,7 @@ class BaseAINode(Node):
         self.latest_ai_waypoints = None
         self.latest_global_path = None
         self.latest_benchmark_global_path = None
+        self.latest_no_ai_dwb_trajectory = None
         self.latest_ai_path = None
         self.latest_shaped_ai_waypoints = None
         self.latest_shaped_ai_waypoint_path = None
