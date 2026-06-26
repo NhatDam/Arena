@@ -111,6 +111,8 @@ class BaseAINode(Node):
                     description='Reject AI local subgoals farther than this distance from the robot; <= 0 disables')),
                 ('path_update_period_sec', 0.5, ParameterDescriptor(
                     description='Minimum period between SocialNav path requests sent to Nav2')),
+                ('compute_path_timeout_sec', 1.0, ParameterDescriptor(
+                    description='Maximum seconds to wait for ComputePathToPose before sending a minimal AI FollowPath path; <= 0 disables timeout')),
                 ('planner_action_name', '', ParameterDescriptor(
                     description='Nav2 ComputePathToPose action name; defaults to <robot_namespace>/compute_path_to_pose')),
                 ('follow_path_action_name', '', ParameterDescriptor(
@@ -238,6 +240,10 @@ class BaseAINode(Node):
             )
             self.rolling_max_local_goal_distance = 0.0
         self.path_update_period_sec = max(0.05, float(self.get_parameter('path_update_period_sec').value))
+        self.compute_path_timeout_sec = max(
+            0.0,
+            float(self.get_parameter('compute_path_timeout_sec').value),
+        )
         self.robot_namespace       = self.get_parameter('robot_namespace').value.rstrip('/')
         self.instruction_topic     = self.get_parameter('instruction_topic').value
         self.human_detections_topic = self.get_parameter('human_detections_topic').value
@@ -397,6 +403,7 @@ class BaseAINode(Node):
         self.latest_ai_path = None
         self.latest_shaped_ai_waypoints = None
         self.latest_shaped_ai_waypoint_path = None
+        self.last_compute_path_goal_handle = None
         self.last_follow_path_goal_handle = None
         self.reset_in_progress   = False
         self.PHASE_AI_LOCAL_GOAL = 'ai_local_goal'
@@ -593,6 +600,7 @@ class BaseAINode(Node):
         self.latest_shaped_ai_waypoints = None
         self.latest_shaped_ai_waypoint_path = None
         self.path_request_in_progress = False
+        self.last_compute_path_goal_handle = None
         with self._image_lock:
             self.image_history.clear()
         self.odom_history.clear()
@@ -741,6 +749,7 @@ class BaseAINode(Node):
         self.latest_shaped_ai_waypoints = None
         self.latest_shaped_ai_waypoint_path = None
         self.path_request_in_progress = False
+        self.last_compute_path_goal_handle = None
         self.last_path_request_time = None
         with self._image_lock:
             self.image_history.clear()
@@ -992,6 +1001,7 @@ class BaseAINode(Node):
         self.phase_local_goal_lock_count = 0
         self.last_path_request_time = None
         self.path_request_in_progress = False
+        self.last_compute_path_goal_handle = None
 
     def _phase_local_goal_candidate(
         self,
@@ -1061,6 +1071,7 @@ class BaseAINode(Node):
         self.phase_local_goal_lock_count += 1
         self.last_path_request_time = None
         self.path_request_in_progress = False
+        self.last_compute_path_goal_handle = None
         shift_str = f"{shift:.2f}m" if shift is not None else "n/a"
         self.get_logger().info(
             "SocialNav rolling local goal locked: "
@@ -1891,6 +1902,27 @@ class BaseAINode(Node):
         else:
             elapsed = (now - self.last_path_request_time).nanoseconds / 1e9
             if self.path_request_in_progress:
+                if self.compute_path_timeout_sec > 0.0 and elapsed >= self.compute_path_timeout_sec:
+                    self.get_logger().warn(
+                        "[PATH_DEBUG] compute_path_timeout "
+                        f"elapsed={elapsed:.3f}s timeout={self.compute_path_timeout_sec:.3f}s "
+                        "fallback=minimal_follow_path",
+                        throttle_duration_sec=0.5,
+                    )
+                    if self.last_compute_path_goal_handle is not None:
+                        try:
+                            self.last_compute_path_goal_handle.cancel_goal_async()
+                        except Exception as exc:
+                            self.get_logger().warn(
+                                f"ComputePathToPose cancel after timeout failed: {exc}",
+                                throttle_duration_sec=2.0,
+                            )
+                    self.last_compute_path_goal_handle = None
+                    self.path_request_in_progress = False
+                    self.last_path_request_time = now
+                    self.latest_ai_waypoints = np.array(waypoints, copy=True)
+                    self._send_ai_follow_path(None, self.latest_ai_waypoints)
+                    return
                 self.get_logger().info(
                     "[PATH_DEBUG] request_skip "
                     f"reason=compute_path_in_progress elapsed={elapsed:.3f}s",
@@ -1971,14 +2003,17 @@ class BaseAINode(Node):
             goal_handle = future.result()
         except Exception as exc:
             self.path_request_in_progress = False
+            self.last_compute_path_goal_handle = None
             self.get_logger().warn(f"ComputePathToPose request failed: {exc}", throttle_duration_sec=2.0)
             return
 
         if not goal_handle.accepted:
             self.path_request_in_progress = False
+            self.last_compute_path_goal_handle = None
             self.get_logger().warn("ComputePathToPose goal rejected.", throttle_duration_sec=2.0)
             return
 
+        self.last_compute_path_goal_handle = goal_handle
         self.get_logger().info(
             "[PATH_DEBUG] compute_path_goal_accepted",
             throttle_duration_sec=0.5,
@@ -1988,6 +2023,7 @@ class BaseAINode(Node):
 
     def _on_compute_path_result(self, future) -> None:
         self.path_request_in_progress = False
+        self.last_compute_path_goal_handle = None
         try:
             result_wrapper = future.result()
             global_path = result_wrapper.result.path
@@ -2700,5 +2736,6 @@ class BaseAINode(Node):
         self.latest_shaped_ai_waypoints = None
         self.latest_shaped_ai_waypoint_path = None
         self.path_request_in_progress = False
+        self.last_compute_path_goal_handle = None
         self._ai_consecutive_failures = 0
         self._reset_phase_state()
