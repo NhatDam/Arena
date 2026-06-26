@@ -402,10 +402,12 @@ class BaseAINode(Node):
         self.path_request_in_progress = False
         self.latest_ai_waypoints = None
         self.latest_global_path = None
+        self.latest_benchmark_global_path = None
         self.latest_ai_path = None
         self.latest_shaped_ai_waypoints = None
         self.latest_shaped_ai_waypoint_path = None
         self.last_compute_path_goal_handle = None
+        self._pending_compute_path_goal_kind = None
         self.last_follow_path_goal_handle = None
         self.last_follow_path_send_time = None
         self.follow_path_send_count = 0
@@ -609,11 +611,13 @@ class BaseAINode(Node):
         self.last_dwb_cmd_log_time = None
         self.latest_ai_waypoints = None
         self.latest_global_path = None
+        self.latest_benchmark_global_path = None
         self.latest_ai_path = None
         self.latest_shaped_ai_waypoints = None
         self.latest_shaped_ai_waypoint_path = None
         self.path_request_in_progress = False
         self.last_compute_path_goal_handle = None
+        self._pending_compute_path_goal_kind = None
         self.last_follow_path_goal_handle = None
         self.last_follow_path_send_time = None
         self.follow_path_send_count = 0
@@ -802,11 +806,13 @@ class BaseAINode(Node):
         self.latest_dwb_cmd = None
         self.latest_ai_waypoints = None
         self.latest_global_path = None
+        self.latest_benchmark_global_path = None
         self.latest_ai_path = None
         self.latest_shaped_ai_waypoints = None
         self.latest_shaped_ai_waypoint_path = None
         self.path_request_in_progress = False
         self.last_compute_path_goal_handle = None
+        self._pending_compute_path_goal_kind = None
         self.last_follow_path_goal_handle = None
         self.last_follow_path_send_time = None
         self.follow_path_send_count = 0
@@ -2048,6 +2054,7 @@ class BaseAINode(Node):
                                 throttle_duration_sec=2.0,
                             )
                     self.last_compute_path_goal_handle = None
+                    self._pending_compute_path_goal_kind = None
                     self.path_request_in_progress = False
                     self.last_path_request_time = now
                     self.latest_ai_waypoints = np.array(waypoints, copy=True)
@@ -2100,6 +2107,7 @@ class BaseAINode(Node):
                 throttle_duration_sec=2.0,
             )
             self.path_request_in_progress = False
+            self._pending_compute_path_goal_kind = None
             self._send_ai_follow_path(None, self.latest_ai_waypoints)
             return
 
@@ -2115,6 +2123,7 @@ class BaseAINode(Node):
                     throttle_duration_sec=2.0,
                 )
                 self.path_request_in_progress = False
+                self._pending_compute_path_goal_kind = None
                 self._send_ai_follow_path(None, self.latest_ai_waypoints)
                 return
         else:
@@ -2135,6 +2144,7 @@ class BaseAINode(Node):
             f"xy=({planner_goal.pose.position.x:.2f},{planner_goal.pose.position.y:.2f})",
             throttle_duration_sec=0.5,
         )
+        self._pending_compute_path_goal_kind = planner_goal_kind
         future = self.compute_path_client.send_goal_async(goal_msg)
         future.add_done_callback(self._on_compute_path_goal_response)
 
@@ -2144,12 +2154,14 @@ class BaseAINode(Node):
         except Exception as exc:
             self.path_request_in_progress = False
             self.last_compute_path_goal_handle = None
+            self._pending_compute_path_goal_kind = None
             self.get_logger().warn(f"ComputePathToPose request failed: {exc}", throttle_duration_sec=2.0)
             return
 
         if not goal_handle.accepted:
             self.path_request_in_progress = False
             self.last_compute_path_goal_handle = None
+            self._pending_compute_path_goal_kind = None
             self.get_logger().warn("ComputePathToPose goal rejected.", throttle_duration_sec=2.0)
             return
 
@@ -2164,6 +2176,8 @@ class BaseAINode(Node):
     def _on_compute_path_result(self, future) -> None:
         self.path_request_in_progress = False
         self.last_compute_path_goal_handle = None
+        planner_goal_kind = self._pending_compute_path_goal_kind
+        self._pending_compute_path_goal_kind = None
         try:
             result_wrapper = future.result()
             global_path = result_wrapper.result.path
@@ -2175,8 +2189,11 @@ class BaseAINode(Node):
             global_path = None
 
         self.latest_global_path = copy.deepcopy(global_path) if global_path is not None else None
+        if planner_goal_kind == 'benchmark_goal' and global_path is not None:
+            self.latest_benchmark_global_path = copy.deepcopy(global_path)
         self.get_logger().info(
             "[PATH_DEBUG] compute_path_result "
+            f"target={planner_goal_kind or 'unknown'} "
             f"global_poses={len(global_path.poses) if global_path is not None else 0} "
             f"has_latest_ai_waypoints={self.latest_ai_waypoints is not None}",
             throttle_duration_sec=0.5,
@@ -2837,7 +2854,7 @@ class BaseAINode(Node):
             self.get_logger().warn(f"Status visualization error: {e}", throttle_duration_sec=2.0)
 
     def _publish_bev_visualization(self, socialnav_waypoints: np.ndarray):
-        """Vẽ BEV tối giản: robot, humans, DWB candidates, DWB baseline, actual path, shaped AI waypoints."""
+        """Vẽ BEV tối giản: robot, humans, DWB candidates, baseline, and AI waypoints."""
         try:
             fig, ax = plt.subplots(figsize=(8, 8), dpi=80)
 
@@ -2857,26 +2874,25 @@ class BaseAINode(Node):
             ax.annotate("", xy=(0.5, 0), xytext=(0, 0),
                         arrowprops=dict(arrowstyle="->", color="black", lw=2.0), zorder=5)
 
-            # Vẽ lịch sử robot thật từ odom, quy về frame local hiện tại của robot.
-            if len(self.odom_history) > 1:
-                trail_points = []
-                for px, py, _ in self.odom_history:
-                    dx = px - cx
-                    dy = py - cy
-                    trail_points.append((
-                        dx * cos_yaw + dy * sin_yaw,
-                        -dx * sin_yaw + dy * cos_yaw,
-                    ))
-                trail_local = np.asarray(trail_points, dtype=np.float32)
-                plot_bounds.append(trail_local)
+            baseline_local = self._path_to_local_array(
+                self.latest_benchmark_global_path,
+                max_points=300,
+            )
+            if baseline_local is None:
+                goal_local = self._goal_to_local()
+                if goal_local is not None:
+                    baseline_local = np.asarray(
+                        [[0.0, 0.0], [goal_local[0], goal_local[1]]],
+                        dtype=np.float32,
+                    )
+            if baseline_local is not None and len(baseline_local) > 1:
+                plot_bounds.append(baseline_local)
                 ax.plot(
-                    trail_local[:, 0],
-                    trail_local[:, 1],
+                    baseline_local[:, 0],
+                    baseline_local[:, 1],
                     color='green',
                     linewidth=2.2,
-                    marker='.',
-                    markersize=4,
-                    label="Actual robot path (AI+DWB)",
+                    label="DWB no-AI baseline",
                     zorder=3,
                 )
 
@@ -2936,7 +2952,7 @@ class BaseAINode(Node):
                     selected_traj[:, 1],
                     color='#0066FF',
                     linewidth=3.2,
-                    label="DWB baseline path (no AI)",
+                    label="DWB best trajectory",
                     zorder=4,
                 )
 
@@ -3036,10 +3052,12 @@ class BaseAINode(Node):
         self.latest_eval = None
         self.latest_ai_waypoints = None
         self.latest_global_path = None
+        self.latest_benchmark_global_path = None
         self.latest_ai_path = None
         self.latest_shaped_ai_waypoints = None
         self.latest_shaped_ai_waypoint_path = None
         self.path_request_in_progress = False
         self.last_compute_path_goal_handle = None
+        self._pending_compute_path_goal_kind = None
         self._ai_consecutive_failures = 0
         self._reset_phase_state()
