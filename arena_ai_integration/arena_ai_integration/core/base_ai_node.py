@@ -109,9 +109,9 @@ class BaseAINode(Node):
                     description='Reject AI local subgoals closer than this distance from the robot; <= 0 disables')),
                 ('rolling_max_local_goal_distance', 4.0, ParameterDescriptor(
                     description='Reject AI local subgoals farther than this distance from the robot; <= 0 disables')),
-                ('path_update_period_sec', 0.5, ParameterDescriptor(
+                ('path_update_period_sec', 1.5, ParameterDescriptor(
                     description='Minimum period between SocialNav path requests sent to Nav2')),
-                ('compute_path_timeout_sec', 1.0, ParameterDescriptor(
+                ('compute_path_timeout_sec', 2.5, ParameterDescriptor(
                     description='Maximum seconds to wait for ComputePathToPose before sending a minimal AI FollowPath path; <= 0 disables timeout')),
                 ('planner_action_name', '', ParameterDescriptor(
                     description='Nav2 ComputePathToPose action name; defaults to <robot_namespace>/compute_path_to_pose')),
@@ -409,6 +409,7 @@ class BaseAINode(Node):
         self.last_follow_path_goal_handle = None
         self.last_follow_path_send_time = None
         self.follow_path_send_count = 0
+        self.active_follow_path_send_count = 0
         self.reset_in_progress   = False
         self.PHASE_AI_LOCAL_GOAL = 'ai_local_goal'
         self.PHASE_GLOBAL_GOAL = 'global_goal'
@@ -612,6 +613,7 @@ class BaseAINode(Node):
         self.last_follow_path_goal_handle = None
         self.last_follow_path_send_time = None
         self.follow_path_send_count = 0
+        self.active_follow_path_send_count = 0
         with self._image_lock:
             self.image_history.clear()
         self.odom_history.clear()
@@ -1490,6 +1492,55 @@ class BaseAINode(Node):
             pass
         return goal
 
+    def _phase_local_goal_pose_for_planner(self, stamp=None) -> PoseStamped | None:
+        """Return the locked AI waypoint as a temporary Nav2 planner goal."""
+        if self.phase_local_goal_odom is None:
+            return None
+
+        odom_frame = self._odom_frame()
+        target_candidates = []
+        if self.current_goal is not None:
+            target_candidates.append(self._frame_name(self.current_goal.header.frame_id))
+        target_candidates.extend(['map', odom_frame])
+
+        seen = set()
+        for target_frame in target_candidates:
+            target = self._frame_name(target_frame)
+            if not target or target in seen:
+                continue
+            seen.add(target)
+
+            target_xy = self._point_between_frames(
+                self.phase_local_goal_odom[0],
+                self.phase_local_goal_odom[1],
+                odom_frame,
+                target,
+            )
+            if target_xy is None:
+                continue
+
+            yaw = 0.0
+            robot_pose = self._robot_pose_in_frame(target)
+            if robot_pose is not None:
+                rx, ry, ryaw = robot_pose
+                dx = target_xy[0] - rx
+                dy = target_xy[1] - ry
+                yaw = math.atan2(dy, dx) if math.hypot(dx, dy) > 1e-3 else ryaw
+
+            return self._pose_stamped(
+                target,
+                target_xy[0],
+                target_xy[1],
+                yaw,
+                stamp,
+            )
+
+        self.get_logger().warn(
+            "Unable to convert AI local subgoal into a planner goal pose.",
+            throttle_duration_sec=2.0,
+        )
+        return None
+
     def _pose_stamped(self, frame_id: str, x: float, y: float, yaw: float, stamp=None) -> PoseStamped:
         pose = PoseStamped()
         pose.header.stamp = stamp if stamp is not None else self.get_clock().now().to_msg()
@@ -1801,6 +1852,34 @@ class BaseAINode(Node):
         path.poses.append(self._pose_stamped(path_frame, rx, ry, ryaw, stamp))
 
         if self._phase_local_goal_active():
+            if global_path is not None and global_path.poses:
+                path.poses.clear()
+                path.header.frame_id = self._frame_name(global_path.header.frame_id) or path_frame
+                path.header.stamp = stamp
+
+                first_x, first_y = self._pose_xy(global_path.poses[0])
+                if math.hypot(first_x - rx, first_y - ry) > 0.05:
+                    path.poses.append(self._pose_stamped(path.header.frame_id, rx, ry, ryaw, stamp))
+
+                for pose in global_path.poses:
+                    path_pose = copy.deepcopy(pose)
+                    path_pose.header.stamp = stamp
+                    path_pose.header.frame_id = path.header.frame_id
+                    path.poses.append(path_pose)
+
+                self._set_intermediate_orientations(path)
+                dist = self._distance_to_phase_local_goal()
+                dist_str = f"{dist:.2f}m" if dist is not None else "n/a"
+                self.get_logger().info(
+                    "SocialNav FollowPath phase=ai_local_goal planner_subgoal_path: "
+                    f"mode={self.local_goal_relock_mode} "
+                    f"subgoal_count={self.phase_local_goal_lock_count} "
+                    f"wp_idx={self.phase_local_goal_wp_idx} poses={len(path.poses)} "
+                    f"local_goal_dist={dist_str} frame={path.header.frame_id}",
+                    throttle_duration_sec=1.0,
+                )
+                return path
+
             target_xy = None
             if self.phase_local_goal_odom is not None:
                 target_xy = self._point_between_frames(
@@ -1994,15 +2073,6 @@ class BaseAINode(Node):
         self.latest_ai_waypoints = np.array(waypoints, copy=True)
         self.last_path_request_time = now
 
-        if self._phase_local_goal_active() and self.dwb_integration_mode != 'shaped_path':
-            self.path_request_in_progress = False
-            self.get_logger().info(
-                "[PATH_DEBUG] direct_follow_path reason=active_local_goal_non_shaped",
-                throttle_duration_sec=0.5,
-            )
-            self._send_ai_follow_path(None, self.latest_ai_waypoints)
-            return
-
         self.path_request_in_progress = True
 
         if not self.compute_path_client.wait_for_server(timeout_sec=0.0):
@@ -2020,8 +2090,24 @@ class BaseAINode(Node):
             return
 
         goal_msg = ComputePathToPose.Goal()
-        goal_msg.goal = copy.deepcopy(self.current_goal)
-        goal_msg.goal.header.stamp = now.to_msg()
+        planner_goal = None
+        planner_goal_kind = 'benchmark_goal'
+        if self._phase_local_goal_active() and self.dwb_integration_mode != 'shaped_path':
+            planner_goal = self._phase_local_goal_pose_for_planner(now.to_msg())
+            planner_goal_kind = 'ai_local_subgoal'
+            if planner_goal is None:
+                self.get_logger().warn(
+                    "[PATH_DEBUG] local_subgoal_pose_unavailable fallback=minimal_follow_path",
+                    throttle_duration_sec=2.0,
+                )
+                self.path_request_in_progress = False
+                self._send_ai_follow_path(None, self.latest_ai_waypoints)
+                return
+        else:
+            planner_goal = copy.deepcopy(self.current_goal)
+            planner_goal.header.stamp = now.to_msg()
+
+        goal_msg.goal = planner_goal
         if hasattr(goal_msg, 'planner_id'):
             goal_msg.planner_id = self.planner_id
         if hasattr(goal_msg, 'use_start'):
@@ -2029,7 +2115,10 @@ class BaseAINode(Node):
 
         self.get_logger().info(
             "[PATH_DEBUG] compute_path_goal_send "
-            f"planner_action={self.planner_action_name}",
+            f"planner_action={self.planner_action_name} "
+            f"target={planner_goal_kind} "
+            f"frame={planner_goal.header.frame_id} "
+            f"xy=({planner_goal.pose.position.x:.2f},{planner_goal.pose.position.y:.2f})",
             throttle_duration_sec=0.5,
         )
         future = self.compute_path_client.send_goal_async(goal_msg)
@@ -2124,10 +2213,13 @@ class BaseAINode(Node):
         if hasattr(goal_msg, 'goal_checker_id'):
             goal_msg.goal_checker_id = self.follow_path_goal_checker_id
 
-        future = self.follow_path_client.send_goal_async(goal_msg)
-        future.add_done_callback(self._on_follow_path_goal_response)
         self.last_follow_path_send_time = self.get_clock().now()
         self.follow_path_send_count += 1
+        send_count = self.follow_path_send_count
+        future = self.follow_path_client.send_goal_async(goal_msg)
+        future.add_done_callback(
+            lambda done_future, seq=send_count: self._on_follow_path_goal_response(done_future, seq)
+        )
 
         wp_idx = self._path_waypoint_index(waypoints)
         wp = waypoints[wp_idx] if wp_idx is not None else [0.0, 0.0]
@@ -2141,7 +2233,7 @@ class BaseAINode(Node):
         )
         return True
 
-    def _on_follow_path_goal_response(self, future) -> None:
+    def _on_follow_path_goal_response(self, future, send_count: int) -> None:
         try:
             goal_handle = future.result()
         except Exception as exc:
@@ -2152,38 +2244,54 @@ class BaseAINode(Node):
             self.get_logger().warn(
                 "[PATH_DEBUG] follow_path_goal_rejected "
                 f"action={self.follow_path_action_name} "
+                f"send_count={send_count} "
                 f"raw_cmd_status=({self._dwb_raw_cmd_status()})",
                 throttle_duration_sec=2.0,
             )
             return
 
         self.last_follow_path_goal_handle = goal_handle
+        self.active_follow_path_send_count = send_count
         self.get_logger().info(
             "[PATH_DEBUG] follow_path_goal_accepted "
             f"action={self.follow_path_action_name} "
-            f"send_count={self.follow_path_send_count}",
+            f"send_count={send_count}",
             throttle_duration_sec=0.5,
         )
         result_future = goal_handle.get_result_async()
-        result_future.add_done_callback(self._on_follow_path_result)
+        result_future.add_done_callback(
+            lambda done_future, seq=send_count: self._on_follow_path_result(done_future, seq)
+        )
 
-    def _on_follow_path_result(self, future) -> None:
+    def _on_follow_path_result(self, future, send_count: int) -> None:
         try:
-            result = future.result()
+            result_wrapper = future.result()
         except Exception as exc:
             self.get_logger().warn(
-                f"[PATH_DEBUG] follow_path_result_error error={exc}",
+                f"[PATH_DEBUG] follow_path_result_error send_count={send_count} error={exc}",
                 throttle_duration_sec=2.0,
             )
             return
 
-        status = getattr(result, 'status', 'unknown')
+        status = getattr(result_wrapper, 'status', 'unknown')
+        result_msg = getattr(result_wrapper, 'result', None)
+        error_code = getattr(result_msg, 'error_code', 'n/a')
+        error_msg = getattr(result_msg, 'error_msg', '')
+        is_current = send_count == self.active_follow_path_send_count
+        state = "current" if is_current else "stale"
         self.get_logger().info(
             "[PATH_DEBUG] follow_path_result "
             f"status={status} action={self.follow_path_action_name} "
+            f"send_count={send_count} active_send_count={self.active_follow_path_send_count} "
+            f"state={state} error_code={error_code} error_msg={error_msg!r} "
             f"raw_cmd_count={self.dwb_cmd_count}",
             throttle_duration_sec=0.5,
         )
+        if is_current:
+            self.last_follow_path_goal_handle = None
+            self.active_follow_path_send_count = 0
+            if status == 6:
+                self.last_path_request_time = None
 
     # ──────────────────────────── Startup / Fallback Helpers ────────────────────
 

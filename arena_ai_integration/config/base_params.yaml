@@ -23,8 +23,8 @@
     local_goal_relock_mode: periodic
     rolling_local_goal_final_radius: 0.8
     rolling_relock_period_sec: 1.5
-    path_update_period_sec: 0.5
-    compute_path_timeout_sec: 1.0
+    path_update_period_sec: 1.5
+    compute_path_timeout_sec: 2.5
     robot_namespace: /task_generator_node/turtlebot
     instruction_topic: /nav_instruction
     human_detections_topic: /detections/humans

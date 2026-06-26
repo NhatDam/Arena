@@ -118,7 +118,8 @@ ARENA_AI_STREAM_DEBUG="${ARENA_AI_STREAM_DEBUG:-1}"
 export ARENA_AI_DWB_INTEGRATION ARENA_AI_DWB_HARD_GATE ARENA_AI_COORDINATE_MODE ARENA_AI_STREAM_DEBUG
 AI_DEBUG_LOG_FILE=""
 AI_DEBUG_LOG_LINE=0
-AI_DEBUG_LOG_PATTERN="WP_DEBUG|PATH_DEBUG|DWB_DEBUG|Sent SocialNav path|AI shaped FollowPath|AI shaped path rejoin|ComputePathToPose|FollowPath action|FollowPath goal|Unable to build SocialNav FollowPath|following AI shaped DWB path; waiting"
+AI_DEBUG_LOG_MISSING_REPORTED=0
+AI_DEBUG_LOG_PATTERN="AI DWB Path Adapter|WP_DEBUG|PATH_DEBUG|DWB_DEBUG|AI path adapter|SocialNav phase|SocialNav FollowPath|planner_subgoal_path|ai_local_subgoal|local_subgoal|Sent SocialNav path|AI shaped FollowPath|AI shaped path rejoin|ComputePathToPose|FollowPath action|FollowPath goal|Unable to build SocialNav FollowPath|following AI shaped DWB path; waiting"
 
 ros2_cli() {
     local -a clean_env=(
@@ -643,11 +644,11 @@ latest_ai_controller_log() {
             continue
         fi
         log_file="${entry#* }"
-        if [ -f "$log_file" ] && grep -Eq "ai_controller_task_generator_node_turtlebot|AI DWB Path Adapter|WP_DEBUG|PATH_DEBUG|DWB_DEBUG" "$log_file"; then
+        if [ -f "$log_file" ] && grep -Eq "ai_controller_task_generator_node_turtlebot|AI DWB Path Adapter|WP_DEBUG|PATH_DEBUG|DWB_DEBUG|planner_subgoal_path|ai_local_subgoal" "$log_file"; then
             printf '%s\n' "$log_file"
             return 0
         fi
-    done < <(find ~/.ros/log -maxdepth 1 -type f -name 'python3_*.log' -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -40)
+    done < <(find ~/.ros/log -maxdepth 2 -type f -name 'python3_*.log' -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -80)
 
     return 1
 }
@@ -660,12 +661,17 @@ stream_ai_debug_logs() {
     local log_file
     log_file=$(latest_ai_controller_log || true)
     if [ -z "$log_file" ] || [ ! -f "$log_file" ]; then
+        if [ "$AI_DEBUG_LOG_MISSING_REPORTED" -eq 0 ]; then
+            echo -e "\n[WARN] AI debug log not found yet under ~/.ros/log; waiting for ai_controller output..."
+            AI_DEBUG_LOG_MISSING_REPORTED=1
+        fi
         return 0
     fi
 
     if [ "$log_file" != "$AI_DEBUG_LOG_FILE" ]; then
         AI_DEBUG_LOG_FILE="$log_file"
         AI_DEBUG_LOG_LINE=0
+        AI_DEBUG_LOG_MISSING_REPORTED=0
         echo -e "\n[INFO] Streaming AI debug log: $AI_DEBUG_LOG_FILE"
     fi
 

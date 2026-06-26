@@ -133,17 +133,17 @@ class BEVVisualizer:
                         zorder=1,
                     )
 
-        selected_traj = best_dwb_eval_trajectory_fn(eval_msg)
-        if selected_traj is not None and len(selected_traj) > 1:
-            plot_bounds.append(selected_traj)
-            ax.plot(
-                selected_traj[:, 0],
-                selected_traj[:, 1],
-                color='#0066FF',
-                linewidth=3.2,
-                label="DWB baseline path (no AI)",
-                zorder=4,
-            )
+        # selected_traj = best_dwb_eval_trajectory_fn(eval_msg)
+        # if selected_traj is not None and len(selected_traj) > 1:
+        #     plot_bounds.append(selected_traj)
+        #     ax.plot(
+        #         selected_traj[:, 0],
+        #         selected_traj[:, 1],
+        #         color='#0066FF',
+        #         linewidth=3.2,
+        #         label="DWB baseline path (no AI)",
+        #         zorder=4,
+        #     )
 
         if ai_segment is not None and inserted_wp is not None and wp_idx is not None:
             plot_bounds.append(ai_segment)
