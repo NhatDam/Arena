@@ -118,7 +118,7 @@ ARENA_AI_STREAM_DEBUG="${ARENA_AI_STREAM_DEBUG:-1}"
 export ARENA_AI_DWB_INTEGRATION ARENA_AI_DWB_HARD_GATE ARENA_AI_COORDINATE_MODE ARENA_AI_STREAM_DEBUG
 AI_DEBUG_LOG_FILE=""
 AI_DEBUG_LOG_LINE=0
-AI_DEBUG_LOG_PATTERN="WP_DEBUG|PATH_DEBUG|Sent SocialNav path|AI shaped FollowPath|AI shaped path rejoin|ComputePathToPose|FollowPath action|FollowPath goal|Unable to build SocialNav FollowPath|following AI shaped DWB path; waiting"
+AI_DEBUG_LOG_PATTERN="WP_DEBUG|PATH_DEBUG|DWB_DEBUG|Sent SocialNav path|AI shaped FollowPath|AI shaped path rejoin|ComputePathToPose|FollowPath action|FollowPath goal|Unable to build SocialNav FollowPath|following AI shaped DWB path; waiting"
 
 ros2_cli() {
     local -a clean_env=(
@@ -643,7 +643,7 @@ latest_ai_controller_log() {
             continue
         fi
         log_file="${entry#* }"
-        if [ -f "$log_file" ] && grep -Eq "ai_controller_task_generator_node_turtlebot|AI DWB Path Adapter|WP_DEBUG|PATH_DEBUG" "$log_file"; then
+        if [ -f "$log_file" ] && grep -Eq "ai_controller_task_generator_node_turtlebot|AI DWB Path Adapter|WP_DEBUG|PATH_DEBUG|DWB_DEBUG" "$log_file"; then
             printf '%s\n' "$log_file"
             return 0
         fi

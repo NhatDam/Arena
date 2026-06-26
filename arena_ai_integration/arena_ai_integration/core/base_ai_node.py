@@ -392,6 +392,8 @@ class BaseAINode(Node):
         self.task_complete       = True
         self.last_eval_time      = self.get_clock().now()
         self.last_dwb_cmd_time   = self.get_clock().now()
+        self.dwb_cmd_count       = 0
+        self.last_dwb_cmd_log_time = None
         self.last_episode_time   = self.get_clock().now()
         self.last_odom_time      = None
         self.last_image_time     = None
@@ -405,6 +407,8 @@ class BaseAINode(Node):
         self.latest_shaped_ai_waypoint_path = None
         self.last_compute_path_goal_handle = None
         self.last_follow_path_goal_handle = None
+        self.last_follow_path_send_time = None
+        self.follow_path_send_count = 0
         self.reset_in_progress   = False
         self.PHASE_AI_LOCAL_GOAL = 'ai_local_goal'
         self.PHASE_GLOBAL_GOAL = 'global_goal'
@@ -488,6 +492,8 @@ class BaseAINode(Node):
             f"(robot_ns={self.robot_namespace}, robot_frame={self.robot_frame}, "
             f"image_topic={self.image_topic}, "
             f"goal_topic={self.current_goal_topic}, "
+            f"dwb_cmd_topic={self.dwb_cmd_topic}, "
+            f"cmd_vel_topic={self.cmd_vel_topic}, "
             f"planner_action={self.planner_action_name}, "
             f"follow_path_action={self.follow_path_action_name}, "
             f"reset_service={self.reset_service_name}, "
@@ -594,6 +600,8 @@ class BaseAINode(Node):
         self.task_complete = True
         self.latest_eval = None
         self.latest_dwb_cmd = None
+        self.dwb_cmd_count = 0
+        self.last_dwb_cmd_log_time = None
         self.latest_ai_waypoints = None
         self.latest_global_path = None
         self.latest_ai_path = None
@@ -601,6 +609,9 @@ class BaseAINode(Node):
         self.latest_shaped_ai_waypoint_path = None
         self.path_request_in_progress = False
         self.last_compute_path_goal_handle = None
+        self.last_follow_path_goal_handle = None
+        self.last_follow_path_send_time = None
+        self.follow_path_send_count = 0
         with self._image_lock:
             self.image_history.clear()
         self.odom_history.clear()
@@ -644,8 +655,29 @@ class BaseAINode(Node):
         self.last_eval_time = self.get_clock().now()
 
     def dwb_cmd_callback(self, msg: Twist):
+        now = self.get_clock().now()
+        previous_time = self.last_dwb_cmd_time
         self.latest_dwb_cmd = msg
-        self.last_dwb_cmd_time = self.get_clock().now()
+        self.last_dwb_cmd_time = now
+        self.dwb_cmd_count += 1
+
+        should_log = self.dwb_cmd_count <= 3
+        if self.last_dwb_cmd_log_time is None:
+            should_log = True
+        else:
+            log_age = (now - self.last_dwb_cmd_log_time).nanoseconds / 1e9
+            should_log = should_log or log_age >= 2.0
+
+        if should_log:
+            dt = (now - previous_time).nanoseconds / 1e9 if previous_time is not None else 0.0
+            self.last_dwb_cmd_log_time = now
+            self.get_logger().info(
+                "[DWB_DEBUG] raw_cmd_received "
+                f"topic={self.dwb_cmd_topic} count={self.dwb_cmd_count} "
+                f"dt={dt:.3f}s v={msg.linear.x:.3f} w={msg.angular.z:.3f} "
+                f"episode_active={self.episode_active} task_complete={self.task_complete}",
+                throttle_duration_sec=0.5,
+            )
 
     def human_detection_callback(self, msg: String):
         try:
@@ -741,6 +773,8 @@ class BaseAINode(Node):
         self.last_episode_time = now
         self.last_eval_time = now
         self.last_dwb_cmd_time = now
+        self.dwb_cmd_count = 0
+        self.last_dwb_cmd_log_time = None
         self.latest_eval = None
         self.latest_dwb_cmd = None
         self.latest_ai_waypoints = None
@@ -750,6 +784,9 @@ class BaseAINode(Node):
         self.latest_shaped_ai_waypoint_path = None
         self.path_request_in_progress = False
         self.last_compute_path_goal_handle = None
+        self.last_follow_path_goal_handle = None
+        self.last_follow_path_send_time = None
+        self.follow_path_send_count = 0
         self.last_path_request_time = None
         with self._image_lock:
             self.image_history.clear()
@@ -2089,6 +2126,8 @@ class BaseAINode(Node):
 
         future = self.follow_path_client.send_goal_async(goal_msg)
         future.add_done_callback(self._on_follow_path_goal_response)
+        self.last_follow_path_send_time = self.get_clock().now()
+        self.follow_path_send_count += 1
 
         wp_idx = self._path_waypoint_index(waypoints)
         wp = waypoints[wp_idx] if wp_idx is not None else [0.0, 0.0]
@@ -2110,12 +2149,39 @@ class BaseAINode(Node):
             return
 
         if not goal_handle.accepted:
-            self.get_logger().warn("FollowPath goal rejected by controller_server.", throttle_duration_sec=2.0)
+            self.get_logger().warn(
+                "[PATH_DEBUG] follow_path_goal_rejected "
+                f"action={self.follow_path_action_name} "
+                f"raw_cmd_status=({self._dwb_raw_cmd_status()})",
+                throttle_duration_sec=2.0,
+            )
             return
 
         self.last_follow_path_goal_handle = goal_handle
         self.get_logger().info(
-            "[PATH_DEBUG] follow_path_goal_accepted",
+            "[PATH_DEBUG] follow_path_goal_accepted "
+            f"action={self.follow_path_action_name} "
+            f"send_count={self.follow_path_send_count}",
+            throttle_duration_sec=0.5,
+        )
+        result_future = goal_handle.get_result_async()
+        result_future.add_done_callback(self._on_follow_path_result)
+
+    def _on_follow_path_result(self, future) -> None:
+        try:
+            result = future.result()
+        except Exception as exc:
+            self.get_logger().warn(
+                f"[PATH_DEBUG] follow_path_result_error error={exc}",
+                throttle_duration_sec=2.0,
+            )
+            return
+
+        status = getattr(result, 'status', 'unknown')
+        self.get_logger().info(
+            "[PATH_DEBUG] follow_path_result "
+            f"status={status} action={self.follow_path_action_name} "
+            f"raw_cmd_count={self.dwb_cmd_count}",
             throttle_duration_sec=0.5,
         )
 
@@ -2164,6 +2230,48 @@ class BaseAINode(Node):
         )
         return True
 
+    def _dwb_raw_cmd_status(self) -> str:
+        now = self.get_clock().now()
+        cmd_age = None
+        if self.latest_dwb_cmd is not None and self.last_dwb_cmd_time is not None:
+            cmd_age = (now - self.last_dwb_cmd_time).nanoseconds / 1e9
+
+        follow_age = None
+        if self.last_follow_path_send_time is not None:
+            follow_age = (now - self.last_follow_path_send_time).nanoseconds / 1e9
+
+        try:
+            raw_publishers = self.count_publishers(self.dwb_cmd_topic)
+        except Exception:
+            raw_publishers = -1
+
+        try:
+            cmd_subscribers = self.count_subscribers(self.cmd_vel_topic)
+        except Exception:
+            cmd_subscribers = -1
+
+        cmd_state = "none"
+        if self.latest_dwb_cmd is not None:
+            stale = cmd_age is not None and cmd_age > self.dwb_cmd_staleness_sec
+            cmd_state = (
+                f"age={cmd_age:.3f}s stale={stale} "
+                f"v={self.latest_dwb_cmd.linear.x:.3f} "
+                f"w={self.latest_dwb_cmd.angular.z:.3f}"
+            )
+
+        follow_state = "none"
+        if follow_age is not None:
+            follow_state = f"age={follow_age:.3f}s count={self.follow_path_send_count}"
+
+        return (
+            f"topic={self.dwb_cmd_topic} raw_publishers={raw_publishers} "
+            f"cmd_subscribers={cmd_subscribers} raw_count={self.dwb_cmd_count} "
+            f"cmd={cmd_state} follow_path={follow_state} "
+            f"has_follow_goal={self.last_follow_path_goal_handle is not None} "
+            f"episode_active={self.episode_active} task_complete={self.task_complete} "
+            f"reset_in_progress={self.reset_in_progress}"
+        )
+
     def _fresh_dwb_raw_cmd(self) -> Twist | None:
         if self.latest_dwb_cmd is None:
             return None
@@ -2184,13 +2292,20 @@ class BaseAINode(Node):
         cmd = self._fresh_dwb_raw_cmd()
         if cmd is None:
             self.get_logger().warn(
-                f"{reason}; waiting for fresh DWB cmd_vel_nav_raw.",
+                f"{reason}; waiting for fresh DWB cmd_vel_nav_raw. "
+                f"[DWB_DEBUG] {self._dwb_raw_cmd_status()}",
                 throttle_duration_sec=2.0,
             )
             self.cmd_pub.publish(Twist())
             return False
 
         self.cmd_pub.publish(cmd)
+        self.get_logger().info(
+            "[DWB_DEBUG] raw_cmd_relayed "
+            f"reason={reason} v={cmd.linear.x:.3f} w={cmd.angular.z:.3f} "
+            f"{self._dwb_raw_cmd_status()}",
+            throttle_duration_sec=2.0,
+        )
         return True
 
     def _publish_dwb_hard_gate_cmd(self, waypoints: np.ndarray) -> bool:
