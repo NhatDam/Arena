@@ -141,7 +141,10 @@ class BaseAINode(Node):
                 ('waypoint_scale', float(agent.config.extra_params.get('waypoint_scale', 1.0)), ParameterDescriptor(
                     description='Optional agent-specific waypoint output scale')),
                 ('dwb_integration_mode', 'path_adapter', ParameterDescriptor(
-                    description='AI-DWB integration: none, path_adapter, shaped_path, or hard_gate')),
+                    description=(
+                        'AI-DWB integration: none, path_adapter, shaped_path, '
+                        'one_waypoint_replace, or hard_gate'
+                    ))),
                 ('shaped_path_num_waypoints', 4, ParameterDescriptor(
                     description='Number of leading AI waypoints inserted into the shaped FollowPath path')),
                 ('social_cost_hard_radius', 0.35, ParameterDescriptor()),
@@ -286,11 +289,17 @@ class BaseAINode(Node):
         )
         self.dwb_integration_mode = str(
             self.get_parameter('dwb_integration_mode').value
-        ).strip().lower()
+        ).strip().lower().replace('-', '_')
         self.use_dwb_hard_gate = bool(self.get_parameter('use_dwb_hard_gate').value)
         if self.use_dwb_hard_gate:
             self.dwb_integration_mode = 'hard_gate'
-        valid_integration_modes = {'none', 'path_adapter', 'shaped_path', 'hard_gate'}
+        valid_integration_modes = {
+            'none',
+            'path_adapter',
+            'shaped_path',
+            'one_waypoint_replace',
+            'hard_gate',
+        }
         if self.dwb_integration_mode not in valid_integration_modes:
             self.get_logger().warn(
                 f"Invalid dwb_integration_mode='{self.dwb_integration_mode}', "
@@ -1701,7 +1710,11 @@ class BaseAINode(Node):
             raise ValueError(f"Expected AI candidates shape [K,T,2], got {arr.shape}")
         arr = arr[:, :, :2]
 
-        if self.dwb_integration_mode not in ('shaped_path', 'hard_gate') or arr.shape[0] == 1:
+        if self.dwb_integration_mode not in (
+            'shaped_path',
+            'one_waypoint_replace',
+            'hard_gate',
+        ) or arr.shape[0] == 1:
             return arr[0], 0, 0.0, float('nan')
 
         humans = None
@@ -1918,9 +1931,171 @@ class BaseAINode(Node):
         )
         return path
 
+    def _build_one_waypoint_replace_path(
+        self,
+        global_path: NavPath | None,
+        waypoints: np.ndarray,
+    ) -> NavPath | None:
+        self.latest_shaped_ai_waypoints = None
+        self.latest_shaped_ai_waypoint_path = None
+        if self.current_goal is None:
+            return None
+
+        source_global_path = global_path
+        if (
+            source_global_path is None
+            and self.latest_benchmark_global_path is not None
+            and self.latest_benchmark_global_path.poses
+        ):
+            source_global_path = self.latest_benchmark_global_path
+            self.get_logger().info(
+                "AI one-waypoint replace using cached benchmark global path.",
+                throttle_duration_sec=1.0,
+            )
+        if source_global_path is None or not source_global_path.poses:
+            self.get_logger().warn(
+                "AI one-waypoint replace requires a Nav2 global path; skipping FollowPath update.",
+                throttle_duration_sec=2.0,
+            )
+            return None
+
+        path_frame = self._frame_name(source_global_path.header.frame_id)
+        if not path_frame:
+            path_frame = self._frame_name(self.current_goal.header.frame_id)
+        if not path_frame:
+            path_frame = self._odom_frame()
+
+        robot_pose = self._robot_pose_in_frame(path_frame)
+        if robot_pose is None:
+            return None
+
+        stamp = self.get_clock().now().to_msg()
+        rx, ry, ryaw = robot_pose
+        robot_global_idx = self._nearest_path_index(source_global_path, rx, ry)
+        tail_start = robot_global_idx + 1
+        if len(source_global_path.poses) > 1:
+            tail_start = max(1, tail_start)
+        tail_start = min(tail_start, len(source_global_path.poses))
+
+        path = NavPath()
+        path.header.stamp = stamp
+        path.header.frame_id = path_frame
+        path.poses.append(self._pose_stamped(path_frame, rx, ry, ryaw, stamp))
+
+        replacement_idx = None
+        replacement_xy = None
+        replacement_wp_idx = self._path_waypoint_index(waypoints)
+        replacement_reason = "ok"
+        replacement_deviation = None
+
+        waypoint = self._path_waypoint(waypoints)
+        if waypoint is None or replacement_wp_idx is None:
+            replacement_reason = "no_ai_waypoint"
+        else:
+            candidate_idx = robot_global_idx + replacement_wp_idx + 1
+            if candidate_idx >= len(source_global_path.poses) - 1:
+                replacement_reason = (
+                    f"target_idx_out_of_range target={candidate_idx} "
+                    f"global_poses={len(source_global_path.poses)}"
+                )
+            else:
+                ai_xy = self._local_waypoint_to_frame(waypoint[:2], path_frame)
+                ai_local = None
+                if ai_xy is not None:
+                    ai_local = self._point_in_frame_to_local(ai_xy[0], ai_xy[1], path_frame)
+                if ai_xy is None or ai_local is None:
+                    replacement_reason = "ai_transform_unavailable"
+                elif ai_local[0] <= 0.05:
+                    replacement_reason = f"ai_not_ahead local_x={ai_local[0]:.2f}"
+                else:
+                    ai_distance = math.hypot(ai_xy[0] - rx, ai_xy[1] - ry)
+                    if (
+                        self.rolling_min_local_goal_distance > 0.0
+                        and ai_distance < self.rolling_min_local_goal_distance
+                    ):
+                        replacement_reason = (
+                            f"ai_too_close dist={ai_distance:.2f} "
+                            f"min={self.rolling_min_local_goal_distance:.2f}"
+                        )
+                    elif (
+                        self.rolling_max_local_goal_distance > 0.0
+                        and ai_distance > self.rolling_max_local_goal_distance
+                    ):
+                        replacement_reason = (
+                            f"ai_too_far dist={ai_distance:.2f} "
+                            f"max={self.rolling_max_local_goal_distance:.2f}"
+                        )
+                    else:
+                        original_x, original_y = self._pose_xy(source_global_path.poses[candidate_idx])
+                        replacement_deviation = math.hypot(ai_xy[0] - original_x, ai_xy[1] - original_y)
+                        replacement_idx = candidate_idx
+                        replacement_xy = ai_xy
+
+        if replacement_idx is None:
+            self.get_logger().warn(
+                "AI one-waypoint replace falling back to original global path: "
+                f"reason={replacement_reason}",
+                throttle_duration_sec=1.0,
+            )
+        else:
+            self.get_logger().info(
+                "AI one-waypoint replace: "
+                f"robot_idx={robot_global_idx} target_idx={replacement_idx} "
+                f"wp_idx={replacement_wp_idx} "
+                f"ai_local=({float(waypoint[0]):.2f},{float(waypoint[1]):.2f}) "
+                f"frame_xy=({replacement_xy[0]:.2f},{replacement_xy[1]:.2f}) "
+                f"deviation={replacement_deviation:.2f}m "
+                f"global_poses={len(source_global_path.poses)}",
+                throttle_duration_sec=1.0,
+            )
+
+        for idx in range(tail_start, len(source_global_path.poses)):
+            if idx == replacement_idx and replacement_xy is not None:
+                tail_pose = self._pose_stamped(
+                    path_frame,
+                    replacement_xy[0],
+                    replacement_xy[1],
+                    ryaw,
+                    stamp,
+                )
+            else:
+                tail_pose = copy.deepcopy(source_global_path.poses[idx])
+                tail_pose.header.stamp = path.header.stamp
+                tail_pose.header.frame_id = path_frame
+
+            if path.poses:
+                last_x, last_y = self._pose_xy(path.poses[-1])
+                pose_x, pose_y = self._pose_xy(tail_pose)
+                if math.hypot(pose_x - last_x, pose_y - last_y) < 0.05:
+                    continue
+            path.poses.append(tail_pose)
+
+        goal_pose = self._goal_pose_in_frame(path_frame, stamp)
+        if goal_pose is None:
+            return None
+        if not path.poses or math.hypot(
+            path.poses[-1].pose.position.x - goal_pose.pose.position.x,
+            path.poses[-1].pose.position.y - goal_pose.pose.position.y,
+        ) > 0.05:
+            path.poses.append(goal_pose)
+        else:
+            path.poses[-1].pose.orientation = goal_pose.pose.orientation
+
+        if len(path.poses) < 2:
+            self.get_logger().warn(
+                "AI one-waypoint replace built fewer than two poses.",
+                throttle_duration_sec=2.0,
+            )
+            return None
+
+        self._set_intermediate_orientations(path)
+        return path
+
     def _build_ai_adapted_path(self, global_path: NavPath | None, waypoints: np.ndarray) -> NavPath | None:
         if self.dwb_integration_mode == 'shaped_path':
             return self._build_ai_shaped_path(global_path, waypoints)
+        if self.dwb_integration_mode == 'one_waypoint_replace':
+            return self._build_one_waypoint_replace_path(global_path, waypoints)
         self.latest_shaped_ai_waypoints = None
         self.latest_shaped_ai_waypoint_path = None
 
@@ -2174,7 +2349,10 @@ class BaseAINode(Node):
         goal_msg = ComputePathToPose.Goal()
         planner_goal = None
         planner_goal_kind = 'benchmark_goal'
-        if self._phase_local_goal_active() and self.dwb_integration_mode != 'shaped_path':
+        if (
+            self._phase_local_goal_active()
+            and self.dwb_integration_mode not in ('shaped_path', 'one_waypoint_replace')
+        ):
             planner_goal = self._phase_local_goal_pose_for_planner(now.to_msg())
             planner_goal_kind = 'ai_local_subgoal'
             if planner_goal is None:
@@ -2799,9 +2977,9 @@ class BaseAINode(Node):
             #    phase 2 returns to the benchmark/global goal.
             if self.dwb_integration_mode == 'none':
                 self._relay_dwb_raw_cmd("AI integration mode is none")
-            elif self.dwb_integration_mode == 'shaped_path':
+            elif self.dwb_integration_mode in ('shaped_path', 'one_waypoint_replace'):
                 self._request_ai_path_update(ros_waypoints)
-                self._relay_dwb_raw_cmd("following AI shaped DWB path")
+                self._relay_dwb_raw_cmd(f"following AI {self.dwb_integration_mode} DWB path")
             else:
                 self._maybe_update_phase_state(ros_waypoints)
                 self._request_ai_path_update(ros_waypoints)

@@ -45,6 +45,16 @@
       "model": "male_adult_construction_01",
       "waypoints": [[4.5, 24.0, 3.14]],
       "behavior_tree": "./bt.xml"
+    },
+    {
+      "name": "hunav_5",
+      "pos": [10.5, 12.5, 3.14],
+      "velocity": 1.2,
+      "desired_velocity": 1.2,
+      "type": "adult",
+      "model": "male_adult_construction_01",
+      "waypoints": [[4.5, 24.0, 3.14]],
+      "behavior_tree": "./bt.xml"
     }
   ]
 }

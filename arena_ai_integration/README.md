@@ -26,6 +26,11 @@ waypoints into the start of that path, rejoins the global path ahead of the
 robot, and sends the result as a `nav_msgs/Path` through Nav2 `FollowPath`.
 The raw AI output is never sent directly to DWB.
 
+With `ARENA_AI_DWB_INTEGRATION=one_waypoint_replace`, Nav2 computes the same
+benchmark global path, but the controller replaces only the selected waypoint
+ahead of the robot (`path_waypoint_index`, default fourth waypoint) with the
+matching AI waypoint before sending the path to DWB.
+
 UrbanNav and LeLaN use the same FollowPath path-adapter as SocialNav. The old
 hard-gate DWB candidate selection and waypoint-regeneration logic is intentionally
 not used by the unified controller.
