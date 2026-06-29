@@ -1777,9 +1777,27 @@ class BaseAINode(Node):
         if self.current_goal is None:
             return None
 
+        source_global_path = global_path
+        if (
+            source_global_path is None
+            and self.latest_benchmark_global_path is not None
+            and self.latest_benchmark_global_path.poses
+        ):
+            source_global_path = self.latest_benchmark_global_path
+            self.get_logger().info(
+                "AI shaped path using cached benchmark global path.",
+                throttle_duration_sec=1.0,
+            )
+        if source_global_path is None or not source_global_path.poses:
+            self.get_logger().warn(
+                "AI shaped path requires a Nav2 global path; skipping shaped FollowPath update.",
+                throttle_duration_sec=2.0,
+            )
+            return None
+
         path_frame = ''
-        if global_path is not None:
-            path_frame = self._frame_name(global_path.header.frame_id)
+        if source_global_path is not None:
+            path_frame = self._frame_name(source_global_path.header.frame_id)
         if not path_frame:
             path_frame = self._frame_name(self.current_goal.header.frame_id)
         if not path_frame:
@@ -1811,6 +1829,12 @@ class BaseAINode(Node):
             if xy is None:
                 continue
             if wp_i == 3:
+                roundtrip_local = self._point_in_frame_to_local(xy[0], xy[1], path_frame)
+                roundtrip_str = (
+                    f"({float(roundtrip_local[0]):.3f},{float(roundtrip_local[1]):.3f})"
+                    if roundtrip_local is not None
+                    else "(n/a,n/a)"
+                )
                 coord_mode = str(self.agent.config.extra_params.get('coordinate_mode', '')).strip() or 'default'
                 self.get_logger().info(
                     "[WP_DEBUG] stage=shaped_local_to_frame wp_idx=3 "
@@ -1818,6 +1842,7 @@ class BaseAINode(Node):
                     f"ros=({float(waypoint[0]):.3f},{float(waypoint[1]):.3f}) "
                     f"selected=({float(waypoint[0]):.3f},{float(waypoint[1]):.3f}) "
                     f"frame_xy=({float(xy[0]):.3f},{float(xy[1]):.3f}) "
+                    f"roundtrip_local={roundtrip_str} "
                     f"robot_yaw={float(ryaw):.3f} "
                     f"mode={self.dwb_integration_mode} coord_mode={coord_mode}",
                     throttle_duration_sec=0.5,
@@ -1831,37 +1856,47 @@ class BaseAINode(Node):
         if goal_pose is None:
             return None
 
-        if last_ai_xy is not None and global_path is not None and global_path.poses:
-            nearest_idx = self._nearest_path_index(global_path, last_ai_xy[0], last_ai_xy[1])
-            tail_start, actual_skip = self._advance_path_index_by_distance(
-                global_path,
-                max(1, nearest_idx) if len(global_path.poses) > 1 else nearest_idx,
-                self.ai_rejoin_skip_distance,
+        robot_global_idx = self._nearest_path_index(source_global_path, rx, ry)
+        rejoin_seed_idx = robot_global_idx
+        nearest_ai_idx = None
+        if last_ai_xy is not None:
+            nearest_ai_idx = self._nearest_path_index(source_global_path, last_ai_xy[0], last_ai_xy[1])
+            rejoin_seed_idx = max(robot_global_idx, nearest_ai_idx)
+
+        tail_seed = max(1, rejoin_seed_idx) if len(source_global_path.poses) > 1 else rejoin_seed_idx
+        tail_start, actual_skip = self._advance_path_index_by_distance(
+            source_global_path,
+            tail_seed,
+            self.ai_rejoin_skip_distance if last_ai_xy is not None else 0.0,
+        )
+        tail_start = max(tail_start, max(1, robot_global_idx) if len(source_global_path.poses) > 1 else robot_global_idx)
+        self.get_logger().info(
+            "AI shaped path rejoin: "
+            f"robot_idx={robot_global_idx} "
+            f"nearest_ai_idx={nearest_ai_idx if nearest_ai_idx is not None else 'none'} "
+            f"rejoin_idx={tail_start} "
+            f"skip={actual_skip:.2f}m target={self.ai_rejoin_skip_distance:.2f}m "
+            f"ai_wps={len(inserted_waypoints_local)}/{min(self.shaped_path_num_waypoints, len(arr))} "
+            f"global_poses={len(source_global_path.poses)}",
+            throttle_duration_sec=1.0,
+        )
+        for pose in source_global_path.poses[tail_start:]:
+            tail_pose = copy.deepcopy(pose)
+            tail_pose.header.stamp = path.header.stamp
+            tail_pose.header.frame_id = path_frame
+            if path.poses:
+                last_x, last_y = self._pose_xy(path.poses[-1])
+                pose_x, pose_y = self._pose_xy(tail_pose)
+                if math.hypot(pose_x - last_x, pose_y - last_y) < 0.05:
+                    continue
+            path.poses.append(tail_pose)
+
+        if len(path.poses) < 2:
+            self.get_logger().warn(
+                "AI shaped path had no usable AI/global tail poses.",
+                throttle_duration_sec=2.0,
             )
-            self.get_logger().info(
-                "AI shaped path rejoin: "
-                f"nearest_idx={nearest_idx} rejoin_idx={tail_start} "
-                f"skip={actual_skip:.2f}m target={self.ai_rejoin_skip_distance:.2f}m "
-                f"ai_wps={min(self.shaped_path_num_waypoints, len(arr))} global_poses={len(global_path.poses)}",
-                throttle_duration_sec=1.0,
-            )
-            for pose in global_path.poses[tail_start:]:
-                tail_pose = copy.deepcopy(pose)
-                tail_pose.header.stamp = path.header.stamp
-                tail_pose.header.frame_id = path_frame
-                path.poses.append(tail_pose)
-        else:
-            start_xy = last_ai_xy if last_ai_xy is not None else (rx, ry)
-            dist = math.hypot(
-                goal_pose.pose.position.x - start_xy[0],
-                goal_pose.pose.position.y - start_xy[1],
-            )
-            n_interp = max(3, int(dist / 0.5)) if dist > 0.3 else 1
-            for idx in range(1, n_interp + 1):
-                alpha = float(idx) / float(n_interp)
-                x = start_xy[0] * (1.0 - alpha) + goal_pose.pose.position.x * alpha
-                y = start_xy[1] * (1.0 - alpha) + goal_pose.pose.position.y * alpha
-                self._append_pose_if_distinct(path, x, y, ryaw, stamp)
+            return None
 
         if math.hypot(
             path.poses[-1].pose.position.x - goal_pose.pose.position.x,
@@ -2922,15 +2957,19 @@ class BaseAINode(Node):
                 )
 
             ai_segment = None
+            anchored_ai_segment = None
             wp_idx = None
             ai_label = "AI shaped waypoints"
             if self.dwb_integration_mode == 'shaped_path' and self.latest_shaped_ai_waypoints is not None:
-                ai_segment = self._path_to_local_array(self.latest_shaped_ai_waypoint_path)
-                if ai_segment is None:
+                anchored_ai_segment = self._path_to_local_array(self.latest_shaped_ai_waypoint_path)
+                if socialnav_waypoints is not None and len(socialnav_waypoints) > 0:
+                    count = min(self.shaped_path_num_waypoints, len(socialnav_waypoints))
+                    ai_segment = np.asarray(socialnav_waypoints[:count], dtype=np.float32)
+                if ai_segment is None and anchored_ai_segment is None:
                     ai_segment = np.asarray(self.latest_shaped_ai_waypoints, dtype=np.float32)
-                if len(ai_segment) > 0:
+                if ai_segment is not None and len(ai_segment) > 0:
                     inserted_wp = np.asarray(ai_segment[-1], dtype=np.float32)
-                    ai_label = f"AI shaped waypoints x{len(ai_segment)}"
+                    ai_label = f"Current AI shaped proposal x{len(ai_segment)}"
             elif socialnav_waypoints is not None and len(socialnav_waypoints) > 0:
                 wp_idx = self._path_waypoint_index(socialnav_waypoints)
                 if wp_idx is not None:
@@ -2981,21 +3020,43 @@ class BaseAINode(Node):
                     zorder=4,
                 )
 
-            no_ai_selected_traj = self._stored_dwb_trajectory_to_local(
-                self.latest_no_ai_dwb_trajectory
-            )
-            if no_ai_selected_traj is not None and len(no_ai_selected_traj) > 1:
-                plot_bounds.append(no_ai_selected_traj)
-                ax.plot(
-                    no_ai_selected_traj[:, 0],
-                    no_ai_selected_traj[:, 1],
-                    color='gold',
-                    linewidth=2.8,
-                    label="DWB selected no-AI",
-                    zorder=4.5,
-                )
+            # no_ai_selected_traj = self._stored_dwb_trajectory_to_local(
+            #     self.latest_no_ai_dwb_trajectory
+            # )
+            # if no_ai_selected_traj is not None and len(no_ai_selected_traj) > 1:
+            #     plot_bounds.append(no_ai_selected_traj)
+            #     ax.plot(
+            #         no_ai_selected_traj[:, 0],
+            #         no_ai_selected_traj[:, 1],
+            #         color='gold',
+            #         linewidth=2.8,
+            #         label="DWB selected no-AI",
+            #         zorder=4.5,
+            #     )
 
-            # Vẽ các waypoint AI thật sự đã được đưa vào shaped path.
+            # Vẽ waypoint đã insert vào FollowPath trước đó và proposal mới nhất.
+            # if anchored_ai_segment is not None and len(anchored_ai_segment) > 0:
+            #     plot_bounds.append(anchored_ai_segment)
+            #     if len(anchored_ai_segment) > 1:
+            #         ax.plot(
+            #             anchored_ai_segment[:, 0],
+            #             anchored_ai_segment[:, 1],
+            #             color='#8B0000',
+            #             linestyle=':',
+            #             linewidth=2.2,
+            #             alpha=0.75,
+            #             label=f"Inserted shaped WPs x{len(anchored_ai_segment)}",
+            #             zorder=5.5,
+            #         )
+            #     ax.scatter(
+            #         anchored_ai_segment[:, 0],
+            #         anchored_ai_segment[:, 1],
+            #         c='#8B0000',
+            #         s=24,
+            #         alpha=0.75,
+            #         zorder=6,
+            #     )
+
             if ai_segment is not None and inserted_wp is not None and len(ai_segment) > 0:
                 plot_bounds.append(ai_segment)
                 if len(ai_segment) > 1:

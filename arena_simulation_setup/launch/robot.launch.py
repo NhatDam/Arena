@@ -269,12 +269,13 @@ def generate_launch_description():
             '-p', PythonExpression(['"arrival_threshold:=', goal_tolerance_radius.substitution, '"']),
             '-p', 'use_arrival_completion:=false',
             '-p', PythonExpression(['"goal_completion_radius:=', goal_tolerance_radius.substitution, '"']),
-            '-p',
-            PythonExpression([
-                '"enable_human_tracking:=true" if "',
-                agent_name.substitution,
-                '".startswith("SocialNav") else "enable_human_tracking:=false"'
-            ]),
+            # '-p',
+            # PythonExpression([
+            #     '"enable_human_tracking:=true" if "',
+            #     agent_name.substitution,
+            #     '".startswith("SocialNav") else "enable_human_tracking:=false"'
+            # ]),
+            '-p', 'enable_human_tracking:=true',
             '-p', 'max_humans:=10',
             '-p', PythonExpression(['"robot_namespace:=', namespace.substitution, '"']),
             '-p', PythonExpression(['"image_topic:=', namespace.substitution, '/rgbd_camera/image"']),

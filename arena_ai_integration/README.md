@@ -20,6 +20,12 @@ RGB / odom / goal / instruction
   -> cmd_vel_nav_raw relay to cmd_vel
 ```
 
+With `ARENA_AI_DWB_INTEGRATION=shaped_path`, Nav2 still computes the benchmark
+global path to the final goal. The AI controller inserts the leading AI
+waypoints into the start of that path, rejoins the global path ahead of the
+robot, and sends the result as a `nav_msgs/Path` through Nav2 `FollowPath`.
+The raw AI output is never sent directly to DWB.
+
 UrbanNav and LeLaN use the same FollowPath path-adapter as SocialNav. The old
 hard-gate DWB candidate selection and waypoint-regeneration logic is intentionally
 not used by the unified controller.
