@@ -2963,13 +2963,17 @@ class BaseAINode(Node):
             if self.dwb_integration_mode == 'shaped_path' and self.latest_shaped_ai_waypoints is not None:
                 anchored_ai_segment = self._path_to_local_array(self.latest_shaped_ai_waypoint_path)
                 if socialnav_waypoints is not None and len(socialnav_waypoints) > 0:
-                    count = min(self.shaped_path_num_waypoints, len(socialnav_waypoints))
-                    ai_segment = np.asarray(socialnav_waypoints[:count], dtype=np.float32)
+                    wp_idx = self._path_waypoint_index(socialnav_waypoints)
+                    if wp_idx is not None:
+                        ai_segment = np.asarray(socialnav_waypoints[wp_idx:], dtype=np.float32)
                 if ai_segment is None and anchored_ai_segment is None:
                     ai_segment = np.asarray(self.latest_shaped_ai_waypoints, dtype=np.float32)
                 if ai_segment is not None and len(ai_segment) > 0:
-                    inserted_wp = np.asarray(ai_segment[-1], dtype=np.float32)
-                    ai_label = f"Current AI shaped proposal x{len(ai_segment)}"
+                    inserted_wp = np.asarray(ai_segment[0], dtype=np.float32)
+                    if wp_idx is not None:
+                        ai_label = f"AI waypoints WP{wp_idx + 1}-WP{len(socialnav_waypoints)}"
+                    else:
+                        ai_label = f"Current AI shaped proposal x{len(ai_segment)}"
             elif socialnav_waypoints is not None and len(socialnav_waypoints) > 0:
                 wp_idx = self._path_waypoint_index(socialnav_waypoints)
                 if wp_idx is not None:
