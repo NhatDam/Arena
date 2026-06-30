@@ -115,6 +115,7 @@ def generate_launch_description():
     if ai_dwb_hard_gate == 'true':
         ai_dwb_integration = 'hard_gate'
     ai_coordinate_mode = os.environ.get('ARENA_AI_COORDINATE_MODE', 'xz_to_ros').strip() or 'xz_to_ros'
+    ai_waypoint_scale = os.environ.get('ARENA_AI_WAYPOINT_SCALE', '10.0').strip() or '10.0'
     ai_process_env = {
         'PYTHONUNBUFFERED': '1',
         'RCUTILS_LOGGING_BUFFERED_STREAM': '0',
@@ -282,6 +283,14 @@ def generate_launch_description():
             '-p', PythonExpression(['"dwb_cmd_topic:=', namespace.substitution, '/cmd_vel_nav_raw"']),
             '-p', 'instruction_topic:=/nav_instruction',
             '-p', f'coordinate_mode:={ai_coordinate_mode}',
+            '-p',
+            PythonExpression([
+                f'"waypoint_scale:={ai_waypoint_scale}" if ("',
+                agent_name.substitution,
+                '".startswith("LeLan") or "',
+                agent_name.substitution,
+                '".startswith("LeLaN")) else "waypoint_scale:=1.0"'
+            ]),
         ],
         output='screen',
         condition=IfCondition(

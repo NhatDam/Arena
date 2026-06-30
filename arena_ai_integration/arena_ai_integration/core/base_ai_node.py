@@ -3142,22 +3142,27 @@ class BaseAINode(Node):
                 anchored_ai_segment = self._path_to_local_array(self.latest_shaped_ai_waypoint_path)
                 if socialnav_waypoints is not None and len(socialnav_waypoints) > 0:
                     wp_idx = self._path_waypoint_index(socialnav_waypoints)
+                    ai_segment = np.asarray(socialnav_waypoints, dtype=np.float32)
                     if wp_idx is not None:
-                        ai_segment = np.asarray(socialnav_waypoints[wp_idx:], dtype=np.float32)
+                        inserted_wp = np.asarray(socialnav_waypoints[wp_idx], dtype=np.float32)
                 if ai_segment is None and anchored_ai_segment is None:
                     ai_segment = np.asarray(self.latest_shaped_ai_waypoints, dtype=np.float32)
                 if ai_segment is not None and len(ai_segment) > 0:
-                    inserted_wp = np.asarray(ai_segment[0], dtype=np.float32)
+                    if inserted_wp is None:
+                        inserted_wp = np.asarray(ai_segment[0], dtype=np.float32)
                     if wp_idx is not None:
-                        ai_label = f"AI waypoints WP{wp_idx + 1}-WP{len(socialnav_waypoints)}"
+                        ai_label = f"AI waypoints WP1-WP{len(socialnav_waypoints)}"
                     else:
                         ai_label = f"Current AI shaped proposal x{len(ai_segment)}"
             elif socialnav_waypoints is not None and len(socialnav_waypoints) > 0:
                 wp_idx = self._path_waypoint_index(socialnav_waypoints)
+                ai_segment = np.asarray(socialnav_waypoints, dtype=np.float32)
                 if wp_idx is not None:
-                    ai_segment = np.asarray(socialnav_waypoints[wp_idx:], dtype=np.float32)
                     inserted_wp = np.asarray(socialnav_waypoints[wp_idx], dtype=np.float32)
-                    ai_label = f"AI waypoints WP{wp_idx + 1}-WP{len(socialnav_waypoints)}"
+                    ai_label = f"AI waypoints WP1-WP{len(socialnav_waypoints)}"
+                else:
+                    inserted_wp = np.asarray(socialnav_waypoints[0], dtype=np.float32)
+                    ai_label = f"AI waypoints WP1-WP{len(socialnav_waypoints)}"
 
             # Vẽ các trajectory ứng viên DWB từ LocalPlanEvaluation (chỉ để quan sát).
             eval_age = self._seconds_since(self.last_eval_time)
@@ -3253,7 +3258,7 @@ class BaseAINode(Node):
                 ax.scatter(ai_segment[:, 0], ai_segment[:, 1],
                            c='red', s=40, zorder=7)
                 ax.scatter([inserted_wp[0]], [inserted_wp[1]], c='orange', s=140, marker='D',
-                           edgecolors='black', label="Last shaped AI WP", zorder=8)
+                           edgecolors='black', label="Selected AI WP", zorder=8)
 
             # Vẽ con người
             if self.enable_human_tracking and self.human_tracker.is_ready():
