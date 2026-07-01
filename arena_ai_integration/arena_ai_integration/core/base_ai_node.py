@@ -113,6 +113,8 @@ class BaseAINode(Node):
                     description='Minimum period between SocialNav path requests sent to Nav2')),
                 ('compute_path_timeout_sec', 2.5, ParameterDescriptor(
                     description='Maximum seconds to wait for ComputePathToPose before sending a minimal AI FollowPath path; <= 0 disables timeout')),
+                ('reference_path_update_period_sec', 1.0, ParameterDescriptor(
+                    description='Minimum period between benchmark-only ComputePathToPose requests used for BEV/reference')),
                 ('planner_action_name', '', ParameterDescriptor(
                     description='Nav2 ComputePathToPose action name; defaults to <robot_namespace>/compute_path_to_pose')),
                 ('follow_path_action_name', '', ParameterDescriptor(
@@ -143,7 +145,7 @@ class BaseAINode(Node):
                 ('dwb_integration_mode', 'path_adapter', ParameterDescriptor(
                     description=(
                         'AI-DWB integration: none, path_adapter, shaped_path, '
-                        'one_waypoint_replace, or hard_gate'
+                        'shaped_path_no_tail, one_waypoint_replace, or hard_gate'
                     ))),
                 ('shaped_path_num_waypoints', 4, ParameterDescriptor(
                     description='Number of leading AI waypoints inserted into the shaped FollowPath path')),
@@ -247,6 +249,10 @@ class BaseAINode(Node):
             0.0,
             float(self.get_parameter('compute_path_timeout_sec').value),
         )
+        self.reference_path_update_period_sec = max(
+            0.05,
+            float(self.get_parameter('reference_path_update_period_sec').value),
+        )
         self.robot_namespace       = self.get_parameter('robot_namespace').value.rstrip('/')
         self.instruction_topic     = self.get_parameter('instruction_topic').value
         self.human_detections_topic = self.get_parameter('human_detections_topic').value
@@ -297,6 +303,7 @@ class BaseAINode(Node):
             'none',
             'path_adapter',
             'shaped_path',
+            'shaped_path_no_tail',
             'one_waypoint_replace',
             'hard_gate',
         }
@@ -409,6 +416,8 @@ class BaseAINode(Node):
         self.last_bev_time       = self.get_clock().now()
         self.last_path_request_time = None
         self.path_request_in_progress = False
+        self.last_reference_path_request_time = None
+        self.reference_path_request_in_progress = False
         self.latest_ai_waypoints = None
         self.latest_global_path = None
         self.latest_benchmark_global_path = None
@@ -417,6 +426,9 @@ class BaseAINode(Node):
         self.latest_shaped_ai_waypoints = None
         self.latest_shaped_ai_waypoint_path = None
         self.last_compute_path_goal_handle = None
+        self.last_reference_compute_path_goal_handle = None
+        self._reference_path_goal_seq = 0
+        self._active_reference_path_goal_seq = None
         self._pending_compute_path_goal_kind = None
         self.last_follow_path_goal_handle = None
         self.last_follow_path_send_time = None
@@ -627,7 +639,12 @@ class BaseAINode(Node):
         self.latest_shaped_ai_waypoints = None
         self.latest_shaped_ai_waypoint_path = None
         self.path_request_in_progress = False
+        self.reference_path_request_in_progress = False
+        self.last_reference_path_request_time = None
         self.last_compute_path_goal_handle = None
+        self.last_reference_compute_path_goal_handle = None
+        self._reference_path_goal_seq += 1
+        self._active_reference_path_goal_seq = None
         self._pending_compute_path_goal_kind = None
         self.last_follow_path_goal_handle = None
         self.last_follow_path_send_time = None
@@ -825,7 +842,12 @@ class BaseAINode(Node):
         self.latest_shaped_ai_waypoints = None
         self.latest_shaped_ai_waypoint_path = None
         self.path_request_in_progress = False
+        self.reference_path_request_in_progress = False
+        self.last_reference_path_request_time = None
         self.last_compute_path_goal_handle = None
+        self.last_reference_compute_path_goal_handle = None
+        self._reference_path_goal_seq += 1
+        self._active_reference_path_goal_seq = None
         self._pending_compute_path_goal_kind = None
         self.last_follow_path_goal_handle = None
         self.last_follow_path_send_time = None
@@ -1712,6 +1734,7 @@ class BaseAINode(Node):
 
         if self.dwb_integration_mode not in (
             'shaped_path',
+            'shaped_path_no_tail',
             'one_waypoint_replace',
             'hard_gate',
         ) or arr.shape[0] == 1:
@@ -1931,6 +1954,90 @@ class BaseAINode(Node):
         )
         return path
 
+    def _build_ai_shaped_no_tail_path(
+        self,
+        global_path: NavPath | None,
+        waypoints: np.ndarray,
+    ) -> NavPath | None:
+        self.latest_shaped_ai_waypoints = None
+        self.latest_shaped_ai_waypoint_path = None
+        if self.current_goal is None:
+            return None
+
+        path_frame = ''
+        if self.current_goal is not None:
+            path_frame = self._frame_name(self.current_goal.header.frame_id)
+        if not path_frame and global_path is not None:
+            path_frame = self._frame_name(global_path.header.frame_id)
+        if not path_frame:
+            path_frame = self._odom_frame()
+
+        robot_pose = self._robot_pose_in_frame(path_frame)
+        if robot_pose is None:
+            return None
+
+        arr = np.asarray(waypoints, dtype=np.float32)
+        if arr.ndim != 2 or arr.shape[1] < 2 or len(arr) == 0:
+            return None
+
+        stamp = self.get_clock().now().to_msg()
+        path = NavPath()
+        path.header.stamp = stamp
+        path.header.frame_id = path_frame
+        shaped_waypoint_path = NavPath()
+        shaped_waypoint_path.header.stamp = stamp
+        shaped_waypoint_path.header.frame_id = path_frame
+
+        rx, ry, ryaw = robot_pose
+        path.poses.append(self._pose_stamped(path_frame, rx, ry, ryaw, stamp))
+
+        inserted_waypoints_local = []
+        for wp_i, waypoint in enumerate(arr[:self.shaped_path_num_waypoints]):
+            xy = self._local_waypoint_to_frame(waypoint[:2], path_frame)
+            if xy is None:
+                continue
+            if wp_i == 3:
+                roundtrip_local = self._point_in_frame_to_local(xy[0], xy[1], path_frame)
+                roundtrip_str = (
+                    f"({float(roundtrip_local[0]):.3f},{float(roundtrip_local[1]):.3f})"
+                    if roundtrip_local is not None
+                    else "(n/a,n/a)"
+                )
+                coord_mode = str(self.agent.config.extra_params.get('coordinate_mode', '')).strip() or 'default'
+                self.get_logger().info(
+                    "[WP_DEBUG] stage=shaped_no_tail_local_to_frame wp_idx=3 "
+                    f"raw=(n/a,n/a) "
+                    f"ros=({float(waypoint[0]):.3f},{float(waypoint[1]):.3f}) "
+                    f"selected=({float(waypoint[0]):.3f},{float(waypoint[1]):.3f}) "
+                    f"frame_xy=({float(xy[0]):.3f},{float(xy[1]):.3f}) "
+                    f"roundtrip_local={roundtrip_str} "
+                    f"robot_yaw={float(ryaw):.3f} "
+                    f"mode={self.dwb_integration_mode} coord_mode={coord_mode}",
+                    throttle_duration_sec=0.5,
+                )
+            if self._append_pose_if_distinct(path, xy[0], xy[1], ryaw, stamp):
+                inserted_waypoints_local.append(np.asarray(waypoint[:2], dtype=np.float32))
+                shaped_waypoint_path.poses.append(copy.deepcopy(path.poses[-1]))
+
+        if len(path.poses) < 2:
+            self.get_logger().warn(
+                "AI shaped no-tail path had no usable AI waypoint poses.",
+                throttle_duration_sec=2.0,
+            )
+            return None
+
+        self._set_intermediate_orientations(path)
+        if inserted_waypoints_local:
+            self.latest_shaped_ai_waypoints = np.asarray(inserted_waypoints_local, dtype=np.float32)
+            self.latest_shaped_ai_waypoint_path = copy.deepcopy(shaped_waypoint_path)
+        self.get_logger().info(
+            "AI shaped no-tail FollowPath: "
+            f"poses={len(path.poses)} ai_wps={len(inserted_waypoints_local)} "
+            f"frame={path_frame}",
+            throttle_duration_sec=1.0,
+        )
+        return path
+
     def _build_one_waypoint_replace_path(
         self,
         global_path: NavPath | None,
@@ -2094,6 +2201,8 @@ class BaseAINode(Node):
     def _build_ai_adapted_path(self, global_path: NavPath | None, waypoints: np.ndarray) -> NavPath | None:
         if self.dwb_integration_mode == 'shaped_path':
             return self._build_ai_shaped_path(global_path, waypoints)
+        if self.dwb_integration_mode == 'shaped_path_no_tail':
+            return self._build_ai_shaped_no_tail_path(global_path, waypoints)
         if self.dwb_integration_mode == 'one_waypoint_replace':
             return self._build_one_waypoint_replace_path(global_path, waypoints)
         self.latest_shaped_ai_waypoints = None
@@ -2249,6 +2358,118 @@ class BaseAINode(Node):
         elapsed = (self.get_clock().now() - self.last_path_request_time).nanoseconds / 1e9
         return elapsed >= self.path_update_period_sec and not self.path_request_in_progress
 
+    def _reference_path_update_due(self) -> bool:
+        if self.last_reference_path_request_time is None:
+            return not self.reference_path_request_in_progress
+        elapsed = (
+            self.get_clock().now() - self.last_reference_path_request_time
+        ).nanoseconds / 1e9
+        return (
+            elapsed >= self.reference_path_update_period_sec
+            and not self.reference_path_request_in_progress
+        )
+
+    def _request_benchmark_reference_path_update(self) -> None:
+        """Compute the benchmark global path for BEV/reference only."""
+        if self.current_goal is None:
+            return
+        if not self._clock_ready_for_nav2():
+            return
+        if not self._reference_path_update_due():
+            return
+        if not self.compute_path_client.wait_for_server(timeout_sec=0.0):
+            self.get_logger().warn(
+                f"Reference ComputePathToPose action {self.planner_action_name} unavailable.",
+                throttle_duration_sec=2.0,
+            )
+            return
+
+        now = self.get_clock().now()
+        planner_goal = copy.deepcopy(self.current_goal)
+        planner_goal.header.stamp = now.to_msg()
+
+        goal_msg = ComputePathToPose.Goal()
+        goal_msg.goal = planner_goal
+        if hasattr(goal_msg, 'planner_id'):
+            goal_msg.planner_id = self.planner_id
+        if hasattr(goal_msg, 'use_start'):
+            goal_msg.use_start = False
+
+        self.reference_path_request_in_progress = True
+        self.last_reference_path_request_time = now
+        self._reference_path_goal_seq += 1
+        reference_seq = self._reference_path_goal_seq
+        self._active_reference_path_goal_seq = reference_seq
+        self.get_logger().info(
+            "[PATH_DEBUG] reference_compute_path_goal_send "
+            f"planner_action={self.planner_action_name} "
+            f"frame={planner_goal.header.frame_id} "
+            f"xy=({planner_goal.pose.position.x:.2f},{planner_goal.pose.position.y:.2f})",
+            throttle_duration_sec=0.5,
+        )
+        future = self.compute_path_client.send_goal_async(goal_msg)
+        future.add_done_callback(
+            lambda done_future, seq=reference_seq: self._on_reference_compute_path_goal_response(
+                done_future,
+                seq,
+            )
+        )
+
+    def _on_reference_compute_path_goal_response(self, future, reference_seq=None) -> None:
+        if reference_seq != self._active_reference_path_goal_seq:
+            return
+        try:
+            goal_handle = future.result()
+        except Exception as exc:
+            self.reference_path_request_in_progress = False
+            self.last_reference_compute_path_goal_handle = None
+            self.get_logger().warn(
+                f"Reference ComputePathToPose request failed: {exc}",
+                throttle_duration_sec=2.0,
+            )
+            return
+
+        if not goal_handle.accepted:
+            self.reference_path_request_in_progress = False
+            self.last_reference_compute_path_goal_handle = None
+            self.get_logger().warn(
+                "Reference ComputePathToPose goal rejected.",
+                throttle_duration_sec=2.0,
+            )
+            return
+
+        self.last_reference_compute_path_goal_handle = goal_handle
+        result_future = goal_handle.get_result_async()
+        result_future.add_done_callback(
+            lambda done_future, seq=reference_seq: self._on_reference_compute_path_result(
+                done_future,
+                seq,
+            )
+        )
+
+    def _on_reference_compute_path_result(self, future, reference_seq=None) -> None:
+        if reference_seq != self._active_reference_path_goal_seq:
+            return
+        self.reference_path_request_in_progress = False
+        self.last_reference_compute_path_goal_handle = None
+        self._active_reference_path_goal_seq = None
+        try:
+            result_wrapper = future.result()
+            global_path = result_wrapper.result.path
+        except Exception as exc:
+            self.get_logger().warn(
+                f"Reference ComputePathToPose result failed: {exc}",
+                throttle_duration_sec=2.0,
+            )
+            return
+
+        self.latest_benchmark_global_path = copy.deepcopy(global_path)
+        self.get_logger().info(
+            "[PATH_DEBUG] reference_compute_path_result "
+            f"global_poses={len(global_path.poses) if global_path is not None else 0}",
+            throttle_duration_sec=0.5,
+        )
+
     def _request_ai_path_update(self, waypoints: np.ndarray) -> None:
         if self.current_goal is None:
             self.get_logger().info(
@@ -2328,6 +2549,12 @@ class BaseAINode(Node):
 
         self.latest_ai_waypoints = np.array(waypoints, copy=True)
         self.last_path_request_time = now
+
+        if self.dwb_integration_mode == 'shaped_path_no_tail':
+            self.path_request_in_progress = False
+            self._pending_compute_path_goal_kind = None
+            self._send_ai_follow_path(None, self.latest_ai_waypoints)
+            return
 
         self.path_request_in_progress = True
 
@@ -2937,8 +3164,10 @@ class BaseAINode(Node):
                     throttle_duration_sec=0.5,
                 )
             if (
-                self.use_arrival_completion
-                and self.controller_reset_enabled
+                (
+                    (self.use_arrival_completion and self.controller_reset_enabled)
+                    or self.dwb_integration_mode == 'shaped_path_no_tail'
+                )
                 and dist_to_goal is not None
                 and dist_to_goal <= self.goal_completion_radius
             ):
@@ -2977,7 +3206,9 @@ class BaseAINode(Node):
             #    phase 2 returns to the benchmark/global goal.
             if self.dwb_integration_mode == 'none':
                 self._relay_dwb_raw_cmd("AI integration mode is none")
-            elif self.dwb_integration_mode in ('shaped_path', 'one_waypoint_replace'):
+            elif self.dwb_integration_mode in ('shaped_path', 'shaped_path_no_tail', 'one_waypoint_replace'):
+                if self.dwb_integration_mode == 'shaped_path_no_tail':
+                    self._request_benchmark_reference_path_update()
                 self._request_ai_path_update(ros_waypoints)
                 self._relay_dwb_raw_cmd(f"following AI {self.dwb_integration_mode} DWB path")
             else:
@@ -3138,7 +3369,7 @@ class BaseAINode(Node):
             anchored_ai_segment = None
             wp_idx = None
             ai_label = "AI shaped waypoints"
-            if self.dwb_integration_mode == 'shaped_path' and self.latest_shaped_ai_waypoints is not None:
+            if self.dwb_integration_mode in ('shaped_path', 'shaped_path_no_tail') and self.latest_shaped_ai_waypoints is not None:
                 anchored_ai_segment = self._path_to_local_array(self.latest_shaped_ai_waypoint_path)
                 if socialnav_waypoints is not None and len(socialnav_waypoints) > 0:
                     wp_idx = self._path_waypoint_index(socialnav_waypoints)
@@ -3345,7 +3576,12 @@ class BaseAINode(Node):
         self.latest_shaped_ai_waypoints = None
         self.latest_shaped_ai_waypoint_path = None
         self.path_request_in_progress = False
+        self.reference_path_request_in_progress = False
+        self.last_reference_path_request_time = None
         self.last_compute_path_goal_handle = None
+        self.last_reference_compute_path_goal_handle = None
+        self._reference_path_goal_seq += 1
+        self._active_reference_path_goal_seq = None
         self._pending_compute_path_goal_kind = None
         self._ai_consecutive_failures = 0
         self._reset_phase_state()

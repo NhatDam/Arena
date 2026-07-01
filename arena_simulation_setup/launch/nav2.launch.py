@@ -57,6 +57,11 @@ def generate_launch_description():
         ai_hybrid_dwb,
         ')'
     ])
+    nav2_bt_inter_planner = IfElseSubstitution(
+        ai_hybrid_dwb,
+        'ai_reference_only',
+        inter_planner.substitution,
+    )
 
     substitutions = YAMLMergeSubstitution(
         YAMLFileSubstitution(
@@ -114,7 +119,7 @@ def generate_launch_description():
                 'configs',
                 'nav2',
                 'interplanners',
-                inter_planner.substitution,
+                nav2_bt_inter_planner,
                 'interplanner_config.yaml'
             ])
         ),
@@ -137,7 +142,7 @@ def generate_launch_description():
                             'configs',
                             'nav2',
                             'interplanners',
-                            inter_planner.substitution,
+                            nav2_bt_inter_planner,
                             'interplanner_config.yaml'
                         ])
                     ),
@@ -150,7 +155,7 @@ def generate_launch_description():
                             'configs',
                             'nav2',
                             'interplanners',
-                            inter_planner.substitution,
+                            nav2_bt_inter_planner,
                             'interplanner_config.yaml'
                         ])
                     ),
@@ -163,7 +168,7 @@ def generate_launch_description():
                             'configs',
                             'nav2',
                             'interplanners',
-                            inter_planner.substitution,
+                            nav2_bt_inter_planner,
                             'interplanner_config.yaml'
                         ])
                     ),

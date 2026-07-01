@@ -1,0 +1,32 @@
+<!--
+  AI reference-only Behavior Tree.
+
+  Nav2 keeps computing the benchmark global path for reference/visualization,
+  but this tree never sends that path to FollowPath. Robot motion is owned by
+  the AI controller's FollowPath requests.
+-->
+
+<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <PipelineSequence name="AIReferenceOnly">
+      <RateController hz="1.0">
+        <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
+      </RateController>
+      <ReactiveFallback name="HoldUntilGoalReached">
+        <GoalReached goal="{goal}"/>
+        <Wait wait_duration="3600"/>
+      </ReactiveFallback>
+    </PipelineSequence>
+  </BehaviorTree>
+</root>
+
+<!-- <root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <PipelineSequence name="NavigateWithReplanning">
+      <RateController hz="4.0">
+        <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
+      </RateController>
+      <FollowPath path="{path}" controller_id="FollowPath"/>
+    </PipelineSequence>
+  </BehaviorTree>
+</root> -->

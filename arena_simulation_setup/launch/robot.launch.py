@@ -2,8 +2,10 @@ import glob
 import os
 
 import launch_ros
+import yaml
 from arena_bringup.future import PythonExpression
 from arena_bringup.substitutions import LaunchArgument
+from ament_index_python.packages import get_package_share_directory
 from launch.conditions import IfCondition
 from launch_ros.actions import PushRosNamespace
 from launch_ros.substitutions import FindPackageShare
@@ -43,6 +45,26 @@ def _env_bool_text(name: str, default: str = 'false') -> str:
     return 'true' if str(value).strip().lower() in ('1', 'true', 'yes', 'on') else 'false'
 
 
+def _read_ros_param_file_value(params_file: str, param_name: str, default: str) -> str:
+    try:
+        with open(params_file, 'r', encoding='utf-8') as file:
+            contents = yaml.safe_load(file) or {}
+    except Exception:
+        return default
+
+    if not isinstance(contents, dict):
+        return default
+
+    for node_params in contents.values():
+        if not isinstance(node_params, dict):
+            continue
+        ros_params = node_params.get('ros__parameters')
+        if isinstance(ros_params, dict) and param_name in ros_params:
+            return str(ros_params[param_name])
+
+    return default
+
+
 def generate_launch_description():
 
     workspace_dir = os.environ.get('WORKSPACE_DIR', os.path.expanduser('~/arena5_ws'))
@@ -52,6 +74,14 @@ def generate_launch_description():
         if os.path.exists(source_sim_setup_root)
         else FindPackageShare('arena_simulation_setup')
     )
+    source_ai_integration_root = os.path.join(workspace_dir, 'src', 'Arena', 'arena_ai_integration')
+    ai_integration_path = (
+        source_ai_integration_root
+        if os.path.exists(source_ai_integration_root)
+        else get_package_share_directory('arena_ai_integration')
+    )
+    urbannav_params_path = os.path.join(ai_integration_path, 'config', 'urbannav_params.yaml')
+    lelan_params_path = os.path.join(ai_integration_path, 'config', 'lelan_params.yaml')
 
     ld_items = []
     LaunchArgument.auto_append(ld_items)
@@ -115,7 +145,24 @@ def generate_launch_description():
     if ai_dwb_hard_gate == 'true':
         ai_dwb_integration = 'hard_gate'
     ai_coordinate_mode = os.environ.get('ARENA_AI_COORDINATE_MODE', 'xz_to_ros').strip() or 'xz_to_ros'
-    ai_waypoint_scale = os.environ.get('ARENA_AI_WAYPOINT_SCALE', '10.0').strip() or '10.0'
+    lelan_waypoint_scale_default = _read_ros_param_file_value(
+        lelan_params_path,
+        'waypoint_scale',
+        '10.0',
+    )
+    urbannav_waypoint_scale_default = _read_ros_param_file_value(
+        urbannav_params_path,
+        'waypoint_scale',
+        '1.0',
+    )
+    ai_lelan_waypoint_scale = (
+        os.environ.get('ARENA_AI_LELAN_WAYPOINT_SCALE', lelan_waypoint_scale_default).strip()
+        or lelan_waypoint_scale_default
+    )
+    ai_urbannav_waypoint_scale = (
+        os.environ.get('ARENA_AI_URBANNAV_WAYPOINT_SCALE', urbannav_waypoint_scale_default).strip()
+        or urbannav_waypoint_scale_default
+    )
     ai_process_env = {
         'PYTHONUNBUFFERED': '1',
         'RCUTILS_LOGGING_BUFFERED_STREAM': '0',
@@ -285,7 +332,10 @@ def generate_launch_description():
             '-p', f'coordinate_mode:={ai_coordinate_mode}',
             '-p',
             PythonExpression([
-                f'"waypoint_scale:={ai_waypoint_scale}" if ("',
+                f'"waypoint_scale:={ai_urbannav_waypoint_scale}" if "',
+                agent_name.substitution,
+                '".startswith("UrbanNav") else ',
+                f'"waypoint_scale:={ai_lelan_waypoint_scale}" if ("',
                 agent_name.substitution,
                 '".startswith("LeLan") or "',
                 agent_name.substitution,

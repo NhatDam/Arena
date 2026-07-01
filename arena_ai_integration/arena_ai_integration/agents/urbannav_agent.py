@@ -67,4 +67,7 @@ class UrbanNavAgent(BaseAgent):
             raise RuntimeError("UrbanNav model is not loaded")
 
         waypoints, arrival_score = self._model.predict(image_history, instruction)
+        waypoint_scale = float(self.config.extra_params.get('waypoint_scale', 1.0))
+        if waypoint_scale != 1.0:
+            waypoints = np.asarray(waypoints, dtype=np.float32) * waypoint_scale
         return waypoints, float(arrival_score)
