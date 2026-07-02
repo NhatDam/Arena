@@ -8,4 +8,4 @@
     ai_rejoin_skip_distance: 0.8
     enable_bev_visualization: true
     enable_human_tracking: true
-    waypoint_scale: 2.5
+    waypoint_scale: 1.5
