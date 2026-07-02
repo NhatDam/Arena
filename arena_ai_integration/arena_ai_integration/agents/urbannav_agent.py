@@ -71,3 +71,22 @@ class UrbanNavAgent(BaseAgent):
         if waypoint_scale != 1.0:
             waypoints = np.asarray(waypoints, dtype=np.float32) * waypoint_scale
         return waypoints, float(arrival_score)
+
+    def to_ros_waypoints(self, waypoints: np.ndarray) -> np.ndarray:
+        arr = np.asarray(waypoints, dtype=np.float32)
+        if arr.ndim != 2 or arr.shape[1] < 2:
+            raise ValueError(f"Expected UrbanNav waypoints shape [T,2], got {arr.shape}")
+        arr = arr[:, :2]
+
+        coordinate_mode = str(self.config.extra_params.get('coordinate_mode', 'xz_to_ros'))
+        if coordinate_mode in ('xz_to_ros', 'dataset_to_ros'):
+            ros_waypoints = np.zeros_like(arr)
+            ros_waypoints[:, 0] = arr[:, 1]
+            ros_waypoints[:, 1] = arr[:, 0]
+            return ros_waypoints
+        if coordinate_mode == 'ros':
+            return np.array(arr, copy=True)
+        raise ValueError(
+            f"Unsupported UrbanNav coordinate_mode='{coordinate_mode}'. "
+            "Use 'xz_to_ros', 'dataset_to_ros', or 'ros'."
+        )
