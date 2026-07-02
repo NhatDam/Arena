@@ -89,8 +89,8 @@ class LeLanAgent(BaseAgent):
         coordinate_mode = str(self.config.extra_params.get('coordinate_mode', 'xz_to_ros'))
         if coordinate_mode == 'xz_to_ros':
             ros_waypoints = np.zeros_like(arr)
-            ros_waypoints[:, 0] = arr[:, 0]
-            ros_waypoints[:, 1] = -arr[:, 1]
+            ros_waypoints[:, 0] = arr[:, 1]
+            ros_waypoints[:, 1] = arr[:, 0]
             return ros_waypoints
         if coordinate_mode == 'ros':
             return np.array(arr, copy=True)

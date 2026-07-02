@@ -689,7 +689,8 @@ class Mod_Benchmark(TM_Module):
         self._log_episode()
 
         msg = String()
-        msg.data = "Navigate safely to the goal and avoid pedestrians"
+        # msg.data = "Navigate safely to the goal and avoid pedestrians"
+        msg.data = "Go to the end hallway and avoid pedestrians" 
 
         # Reuse the latched publisher so late subscribers still receive
         # the latest instruction and QoS stays compatible.
