@@ -8,11 +8,11 @@ contestants:
   #   goal_tolerance_radius: 0.25
 
   # ---- Urban Navigation (UrbanNav FiLM) ----
-  - name: UrbanNav_FiLM
-    local_planner: dwb
-    inter_planner: navigate_w_replanning_time
-    agent_name: UrbanNav_FiLM
-    goal_tolerance_radius: 0.25
+  # - name: UrbanNav_FiLM
+  #   local_planner: dwb
+  #   inter_planner: navigate_w_replanning_time
+  #   agent_name: UrbanNav_FiLM
+  #   goal_tolerance_radius: 0.25
 
   # ---- LeLan ----
   # - name: LeLan_v1
@@ -22,11 +22,11 @@ contestants:
   #   goal_tolerance_radius: 0.25
 
   # ---- Baseline DWB (non-AI) ----
-  # - name: DWB_Baseline
-  #   local_planner: dwb
-  #   inter_planner: navigate_w_replanning_time
-  #   agent_name: ""
-  #   goal_tolerance_radius: 0.25
+  - name: DWB_Baseline
+    local_planner: dwb
+    inter_planner: navigate_w_replanning_time
+    agent_name: ""
+    goal_tolerance_radius: 0.25
 
   # ---- CityWalker ----
   # - name: CityWalker-v1

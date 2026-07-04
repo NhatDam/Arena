@@ -90,6 +90,8 @@ ARENA_AI_DWB_INTEGRATION=shaped_path ARENA_AI_COORDINATE_MODE=dataset_to_ros ARE
 AGENT_TYPE=socialnav ./src/Arena/arena_ai_integration/scripts/start_agent.sh
 AGENT_TYPE=urbannav ./src/Arena/arena_ai_integration/scripts/start_agent.sh
 AGENT_TYPE=lelan ./src/Arena/arena_ai_integration/scripts/start_agent.sh
+
+RUN_ID=001 EXPERIMENT_TAG=hospital_1_default_05_ep001 ./src/Arena/arena_ai_integration/scripts/start_data_recorder.sh
 ```
 
 Benchmark runs use `arena_simulation_setup/launch/robot.launch.py` to map:

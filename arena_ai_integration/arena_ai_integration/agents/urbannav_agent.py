@@ -66,11 +66,60 @@ class UrbanNavAgent(BaseAgent):
         if self._model is None:
             raise RuntimeError("UrbanNav model is not loaded")
 
-        waypoints, arrival_score = self._model.predict(image_history, instruction)
+        context = context or PredictionContext()
+        human_positions = self._latest_valid_humans(context)
+
+        import torch
+
+        if context.cuda_stream is not None:
+            with torch.cuda.stream(context.cuda_stream):
+                waypoints, arrival_score = self._model.predict(
+                    image_history,
+                    instruction,
+                    human_positions=human_positions,
+                )
+            torch.cuda.current_stream().wait_stream(context.cuda_stream)
+        else:
+            waypoints, arrival_score = self._model.predict(
+                image_history,
+                instruction,
+                human_positions=human_positions,
+            )
+
         waypoint_scale = float(self.config.extra_params.get('waypoint_scale', 1.0))
         if waypoint_scale != 1.0:
             waypoints = np.asarray(waypoints, dtype=np.float32) * waypoint_scale
         return waypoints, float(arrival_score)
+
+    @staticmethod
+    def _latest_valid_humans(context: PredictionContext) -> Optional[List[np.ndarray]]:
+        if context.human_positions is None:
+            return None
+
+        humans = np.asarray(context.human_positions, dtype=np.float32)
+        if humans.ndim == 3:
+            latest = humans[-1]
+            if context.human_mask is not None:
+                mask = np.asarray(context.human_mask, dtype=bool)
+                if mask.shape == humans.shape[:2]:
+                    latest = latest[~mask[-1]]
+        elif humans.ndim == 2:
+            latest = humans
+            if context.human_mask is not None:
+                mask = np.asarray(context.human_mask, dtype=bool)
+                if mask.shape == humans.shape[:1]:
+                    latest = latest[~mask]
+        else:
+            return None
+
+        if latest.size == 0:
+            return None
+        latest = latest[:, :2]
+        finite = np.isfinite(latest).all(axis=1)
+        latest = latest[finite]
+        if len(latest) == 0:
+            return None
+        return [np.asarray(pos, dtype=np.float32) for pos in latest]
 
     def to_ros_waypoints(self, waypoints: np.ndarray) -> np.ndarray:
         arr = np.asarray(waypoints, dtype=np.float32)
