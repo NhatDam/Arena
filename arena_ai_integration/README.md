@@ -91,7 +91,7 @@ AGENT_TYPE=socialnav ./src/Arena/arena_ai_integration/scripts/start_agent.sh
 AGENT_TYPE=urbannav ./src/Arena/arena_ai_integration/scripts/start_agent.sh
 AGENT_TYPE=lelan ./src/Arena/arena_ai_integration/scripts/start_agent.sh
 
-RUN_ID=001 EXPERIMENT_TAG=hospital_1_default_05_ep001 ./src/Arena/arena_ai_integration/scripts/start_data_recorder.sh
+SCENARIOS=default_05,default_04,moving_peds EPISODES=1 RUN_DURATION=180 LOCAL_PLANNER=mppi RUN_ID_START=2000 ./src/Arena/arena_ai_integration/scripts/start_data_recorder.sh
 ```
 
 Benchmark runs use `arena_simulation_setup/launch/robot.launch.py` to map:
